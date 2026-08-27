@@ -10,7 +10,8 @@ body {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    /* Use dynamic viewport height (dvh) so mobile browsers don't hide the top/bottom */
+    height: 100dvh; 
     width: 100vw;
     /* Prevent accidental scrolling/refreshing on touch devices */
     overflow: hidden;
@@ -19,7 +20,7 @@ body {
 
 .app-container {
     width: 100vw;
-    height: 100vh;
+    height: 100dvh;
     background-color: #ffffff;
     display: flex;
     flex-direction: column;
@@ -27,6 +28,7 @@ body {
 }
 
 .header {
+    flex-shrink: 0; /* Prevent the question from being squished or hidden */
     padding: 24px;
     background-color: #2c3e50;
     color: white;
