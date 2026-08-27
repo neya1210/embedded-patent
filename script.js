@@ -40,11 +40,8 @@ function updateQuestion() {
 }
 
 function clearCanvas() {
-    // Fill the canvas background with white.
-    // This is invisible to the user (because CSS handles the lined paper look behind it),
-    // but it is REQUIRED so the OCR engine doesn't read a transparent black image.
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Clear the canvas to be transparent so the CSS ruled lines show through
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
 // --- POINTER EVENTS CORE LOGIC ---
@@ -71,10 +68,10 @@ canvas.addEventListener('pointermove', (e) => {
     
     // Only draw if it's the pen moving
     if (e.pointerType === 'pen') {
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 6;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#2c3e50'; // Dark blue/gray ink
+        ctx.strokeStyle = '#000000'; // Pure black for better OCR
         
         ctx.lineTo(e.offsetX, e.offsetY);
         ctx.stroke();
@@ -111,8 +108,18 @@ async function readWrittenText() {
     statusOverlay.classList.remove('hidden');
     
     try {
-        // Extract the drawing from the canvas as a base64 image
-        const dataUrl = canvas.toDataURL('image/png');
+        // Create a temporary canvas to add a white background
+        // (Tesseract needs a solid white background, but our UI canvas is transparent)
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = canvas.width;
+        tempCanvas.height = canvas.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.fillStyle = 'white';
+        tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+        tempCtx.drawImage(canvas, 0, 0);
+
+        // Extract the drawing from the temporary canvas as a base64 image
+        const dataUrl = tempCanvas.toDataURL('image/png');
         
         // Pass the image to Tesseract.js to recognize English ('eng') text
         const result = await Tesseract.recognize(dataUrl, 'eng', {
