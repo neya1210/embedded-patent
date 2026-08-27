@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Smart Stylus Notebook</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Load Tesseract.js for optical character recognition (Handwriting to text) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Question Section -->
+        <div class="header">
+            <h2 id="question-text">Loading...</h2>
+        </div>
+        
+        <!-- Canvas Section -->
+        <div class="canvas-container">
+            <canvas id="drawing-canvas"></canvas>
+            <div id="status-overlay" class="hidden">Reading handwriting...</div>
+        </div>
+        
+        <!-- Controls -->
+        <div class="footer">
+            <button id="clear-btn">Clear Page</button>
+            <button id="next-btn">Next Question ➔</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
