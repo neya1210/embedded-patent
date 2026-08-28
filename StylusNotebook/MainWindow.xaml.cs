@@ -80,11 +80,20 @@ namespace StylusNotebook
                 var analyzer = new InkAnalyzer();
                 var builder = new InkStrokeBuilder();
 
-                // Convert WPF Strokes to WinRT Strokes for the AI Analyzer
+                // Convert WPF Strokes to WinRT Strokes WITH Pressure Data for much better AI recognition
                 foreach (var stroke in MyInkCanvas.Strokes)
                 {
-                    var points = stroke.StylusPoints.Select(p => new Windows.Foundation.Point(p.X, p.Y)).ToList();
-                    var winRtStroke = builder.CreateStroke(points);
+                    var inkPoints = stroke.StylusPoints.Select(p => 
+                        new Windows.UI.Input.Inking.InkPoint(
+                            new Windows.Foundation.Point(p.X, p.Y), 
+                            p.PressureFactor) // Pass X, Y, and Pen Pressure
+                        ).ToList();
+                        
+                    // Create stroke from points
+                    var winRtStroke = builder.CreateStrokeFromInkPoints(
+                        inkPoints, 
+                        System.Numerics.Matrix3x2.Identity);
+                        
                     analyzer.AddDataForStroke(winRtStroke);
                 }
 
