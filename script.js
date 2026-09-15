@@ -202,6 +202,8 @@ roundKey.addEventListener('pointerup', (e) => {
 
 // --- POINTER EVENTS (Writing & Screen Tap) ---
 let currentStrokeObj = null;
+let touchStartX = null;
+let touchStartY = null;
 
 canvas.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'pen') {
@@ -214,9 +216,8 @@ canvas.addEventListener('pointerdown', (e) => {
         if(navigator.vibrate) navigator.vibrate(10); 
     } 
     else if (e.pointerType === 'touch' || e.pointerType === 'mouse') {
-        if (!isProcessingOCR) {
-            readWrittenText(e.offsetX, e.offsetY);
-        }
+        touchStartX = e.offsetX;
+        touchStartY = e.offsetY;
     }
 });
 
@@ -226,7 +227,7 @@ canvas.addEventListener('pointermove', (e) => {
         e.offsetY < margin || e.offsetY > canvas.height - margin) {
         canvasContainer.classList.add('boundary-warning');
         if (isDrawing && navigator.vibrate) navigator.vibrate(50);
-        if (isDrawing && currentStrokeObj.points.length % 10 === 0) playTone(150, 0.2, 0.05, 'square');
+        if (isDrawing && currentStrokeObj && currentStrokeObj.points.length % 10 === 0) playTone(150, 0.2, 0.05, 'square');
     } else {
         canvasContainer.classList.remove('boundary-warning');
     }
@@ -251,7 +252,7 @@ canvas.addEventListener('pointermove', (e) => {
         ctx.lineTo(e.offsetX, e.offsetY);
         ctx.stroke();
         
-        currentStrokeObj.points.push({x: e.offsetX, y: e.offsetY});
+        if (currentStrokeObj) currentStrokeObj.points.push({x: e.offsetX, y: e.offsetY});
         e.preventDefault();
     }
 });
@@ -266,11 +267,21 @@ canvas.addEventListener('pointerup', (e) => {
             lastKnownPoint = currentStrokeObj.points[currentStrokeObj.points.length - 1];
             saveExamData();
         }
+    } else if (e.pointerType === 'touch' || e.pointerType === 'mouse') {
+        if (!isProcessingOCR && touchStartX !== null && touchStartY !== null) {
+            readWrittenText(touchStartX, touchStartY, e.offsetX, e.offsetY);
+        }
+        touchStartX = null;
+        touchStartY = null;
     }
     ctx.globalCompositeOperation = 'source-over';
 });
 
-canvas.addEventListener('pointercancel', () => { isDrawing = false; });
+canvas.addEventListener('pointercancel', () => { 
+    isDrawing = false; 
+    touchStartX = null;
+    touchStartY = null;
+});
 
 
 // --- NAVIGATION CONTROLS ---
@@ -292,8 +303,8 @@ submitBtn.addEventListener('click', () => {
 
 // --- OCR (Handwriting to Text) AND TTS (Text to Speech) ---
 
-// Screen Tap to Read from Word
-async function readWrittenText(touchX, touchY) {
+// Screen Tap/Drag to Read Segment
+async function readWrittenText(startX, startY, endX, endY) {
     isProcessingOCR = true;
     statusOverlay.textContent = "Reconstructing text...";
     statusOverlay.classList.remove('hidden');
@@ -315,25 +326,55 @@ async function readWrittenText(touchX, touchY) {
 
         if (words && words.length > 0) {
             let startIndex = 0;
-            if (touchX !== undefined && touchY !== undefined) {
-                let minDistance = Infinity;
+            let endIndex = words.length - 1;
+
+            if (startX !== undefined && startY !== undefined) {
+                let minStartDist = Infinity;
+                let minEndDist = Infinity;
+                
+                const isDrag = Math.hypot(endX - startX, endY - startY) > 20;
+
                 words.forEach((word, index) => {
                     const rect = word.bbox; 
-                    if (touchX >= rect.x0 && touchX <= rect.x1 && touchY >= rect.y0 && touchY <= rect.y1) {
+                    const centerX = rect.x0 + (rect.x1 - rect.x0) / 2;
+                    const centerY = rect.y0 + (rect.y1 - rect.y0) / 2;
+
+                    // Match Start Coordinate
+                    if (startX >= rect.x0 && startX <= rect.x1 && startY >= rect.y0 && startY <= rect.y1) {
                         startIndex = index;
-                        minDistance = -1; 
-                    } else if (minDistance !== -1) {
-                        const centerX = rect.x0 + (rect.x1 - rect.x0) / 2;
-                        const centerY = rect.y0 + (rect.y1 - rect.y0) / 2;
-                        const dist = Math.hypot(centerX - touchX, centerY - touchY);
-                        if (dist < minDistance) { minDistance = dist; startIndex = index; }
+                        minStartDist = -1; 
+                    } else if (minStartDist !== -1) {
+                        const dist = Math.hypot(centerX - startX, centerY - startY);
+                        if (dist < minStartDist) { minStartDist = dist; startIndex = index; }
+                    }
+
+                    // Match End Coordinate if it was a drag
+                    if (isDrag) {
+                        if (endX >= rect.x0 && endX <= rect.x1 && endY >= rect.y0 && endY <= rect.y1) {
+                            endIndex = index;
+                            minEndDist = -1; 
+                        } else if (minEndDist !== -1) {
+                            const dist = Math.hypot(centerX - endX, centerY - endY);
+                            if (dist < minEndDist) { minEndDist = dist; endIndex = index; }
+                        }
                     }
                 });
                 
-                if (minDistance > 150 && minDistance !== -1) {
-                    textToRead = "";
+                if (minStartDist > 150 && minStartDist !== -1) {
+                    textToRead = ""; // Ignored tap/drag far away from text
                 } else {
-                    textToRead = words.slice(startIndex).map(w => w.text).join(' ').trim();
+                    if (isDrag) {
+                        // Ensure chronological order
+                        if (startIndex > endIndex) {
+                            let temp = startIndex;
+                            startIndex = endIndex;
+                            endIndex = temp;
+                        }
+                        textToRead = words.slice(startIndex, endIndex + 1).map(w => w.text).join(' ').trim();
+                    } else {
+                        // Tap only: Read from start word to the very end
+                        textToRead = words.slice(startIndex).map(w => w.text).join(' ').trim();
+                    }
                 }
             } else {
                 textToRead = result.data.text.trim();
