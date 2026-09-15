@@ -3,28 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Smart Stylus Notebook</title>
+    <title>Secure Smart Stylus Notebook</title>
     <link rel="stylesheet" href="style.css">
     <!-- Load Tesseract.js for optical character recognition (Handwriting to text) -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <!-- Load CryptoJS for offline secure storage -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
 </head>
 <body>
+    <div id="tamper-alert" class="hidden">
+        <h2>SECURITY ALERT</h2>
+        <p>Application focus lost. This event has been logged.</p>
+        <button id="dismiss-tamper-btn">Acknowledge</button>
+    </div>
+
     <div class="app-container">
         <!-- Question Section -->
         <div class="header">
             <h2 id="question-text">Loading...</h2>
+            <div class="status-indicators">
+                <span id="sync-status">Offline - Secure</span>
+            </div>
         </div>
         
         <!-- Canvas Section -->
-        <div class="canvas-container">
+        <div class="canvas-container" id="canvas-container">
             <canvas id="drawing-canvas"></canvas>
             <div id="status-overlay" class="hidden">Reading handwriting...</div>
+            <div id="boundary-overlay" class="hidden"></div>
         </div>
         
         <!-- Controls -->
         <div class="footer">
             <button id="clear-btn">Clear Page</button>
-            <button id="next-btn">Next Question ➔</button>
+            <button id="prev-btn">⬅ Prev</button>
+            <button id="next-btn">Next ➔</button>
+            <button id="submit-btn" style="background-color: #27ae60; color: white;">Submit Exam</button>
         </div>
     </div>
 
