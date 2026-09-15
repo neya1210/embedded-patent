@@ -156,7 +156,7 @@ canvas.addEventListener('pointerdown', (e) => {
     } 
     else if (e.pointerType === 'touch' || e.pointerType === 'mouse') {
         if (!isProcessingOCR) {
-            readWrittenText();
+            readWrittenText(e.offsetX, e.offsetY);
         }
     }
 });
@@ -238,7 +238,7 @@ submitBtn.addEventListener('click', () => {
 
 
 // --- OCR (Handwriting to Text) AND TTS (Text to Speech) ---
-async function readWrittenText() {
+async function readWrittenText(touchX, touchY) {
     isProcessingOCR = true;
     statusOverlay.textContent = "Reconstructing text...";
     statusOverlay.classList.remove('hidden');
@@ -255,13 +255,50 @@ async function readWrittenText() {
         const dataUrl = tempCanvas.toDataURL('image/png');
         
         const result = await Tesseract.recognize(dataUrl, 'eng');
-        const text = result.data.text.trim();
+        const words = result.data.words;
         
-        if (text.length > 0) {
+        let textToRead = "";
+
+        if (words && words.length > 0) {
+            let startIndex = 0;
+            if (touchX !== undefined && touchY !== undefined) {
+                let minDistance = Infinity;
+                
+                words.forEach((word, index) => {
+                    const rect = word.bbox; // {x0, y0, x1, y1}
+                    
+                    if (touchX >= rect.x0 && touchX <= rect.x1 && touchY >= rect.y0 && touchY <= rect.y1) {
+                        startIndex = index;
+                        minDistance = -1; // Exact match inside bounding box
+                    } else if (minDistance !== -1) {
+                        // Find distance to center of word
+                        const centerX = rect.x0 + (rect.x1 - rect.x0) / 2;
+                        const centerY = rect.y0 + (rect.y1 - rect.y0) / 2;
+                        const dist = Math.hypot(centerX - touchX, centerY - touchY);
+                        if (dist < minDistance) {
+                            minDistance = dist;
+                            startIndex = index;
+                        }
+                    }
+                });
+                
+                // If they touched way too far from any text (e.g. > 150px away), don't read
+                if (minDistance > 150 && minDistance !== -1) {
+                    textToRead = "";
+                } else {
+                    // Extract text starting from the touched word to the end
+                    textToRead = words.slice(startIndex).map(w => w.text).join(' ').trim();
+                }
+            } else {
+                textToRead = result.data.text.trim();
+            }
+        }
+        
+        if (textToRead.length > 0) {
             statusOverlay.textContent = "Speaking...";
-            speak(text);
+            speak(textToRead);
         } else {
-            statusOverlay.textContent = "No writing detected.";
+            statusOverlay.textContent = "No writing detected nearby.";
             setTimeout(() => { statusOverlay.classList.add('hidden'); }, 2000);
         }
     } catch (error) {
