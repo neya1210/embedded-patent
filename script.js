@@ -306,7 +306,7 @@ submitBtn.addEventListener('click', () => {
 // Screen Tap/Drag to Read Segment
 async function readWrittenText(startX, startY, endX, endY) {
     isProcessingOCR = true;
-    statusOverlay.textContent = "Reconstructing text...";
+    statusOverlay.textContent = "Analyzing touched area...";
     statusOverlay.classList.remove('hidden');
     
     try {
@@ -332,7 +332,7 @@ async function readWrittenText(startX, startY, endX, endY) {
                 let minStartDist = Infinity;
                 let minEndDist = Infinity;
                 
-                const isDrag = Math.hypot(endX - startX, endY - startY) > 20;
+                const isDrag = endX !== undefined && endY !== undefined && Math.hypot(endX - startX, endY - startY) > 20;
 
                 words.forEach((word, index) => {
                     const rect = word.bbox; 
@@ -360,7 +360,7 @@ async function readWrittenText(startX, startY, endX, endY) {
                     }
                 });
                 
-                if (minStartDist > 150 && minStartDist !== -1) {
+                if (minStartDist > 100 && minStartDist !== -1) {
                     textToRead = ""; // Ignored tap/drag far away from text
                 } else {
                     if (isDrag) {
@@ -372,8 +372,8 @@ async function readWrittenText(startX, startY, endX, endY) {
                         }
                         textToRead = words.slice(startIndex, endIndex + 1).map(w => w.text).join(' ').trim();
                     } else {
-                        // Tap only: Read from start word to the very end
-                        textToRead = words.slice(startIndex).map(w => w.text).join(' ').trim();
+                        // Tap only: Read EXACTLY the single touched word
+                        textToRead = words[startIndex].text;
                     }
                 }
             } else {
@@ -381,11 +381,11 @@ async function readWrittenText(startX, startY, endX, endY) {
             }
         }
         
-        if (textToRead.length > 0) {
+        if (textToRead && textToRead.trim().length > 0) {
             statusOverlay.textContent = "Speaking...";
             speak(textToRead);
         } else {
-            statusOverlay.textContent = "No writing detected nearby.";
+            statusOverlay.textContent = "No text found at touched area.";
             setTimeout(() => { statusOverlay.classList.add('hidden'); }, 2000);
         }
     } catch (error) {
