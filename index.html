@@ -21,21 +21,29 @@
         <!-- Question Section -->
         <div class="header">
             <h2 id="question-text">Loading...</h2>
-            <div class="status-indicators">
-                <span id="sync-status">Offline - Secure</span>
+            <div class="header-right">
+                <button id="read-q-btn" class="util-btn">🔊 Read Question</button>
+                <span id="sync-status" class="status-indicators">Offline - Secure</span>
             </div>
         </div>
         
         <!-- Canvas Section -->
         <div class="canvas-container" id="canvas-container">
             <canvas id="drawing-canvas"></canvas>
+            
+            <!-- Round Key FAB -->
+            <button id="round-key" class="fab">💬</button>
+            
             <div id="status-overlay" class="hidden">Reading handwriting...</div>
             <div id="boundary-overlay" class="hidden"></div>
         </div>
         
         <!-- Controls -->
         <div class="footer">
+            <button id="eraser-btn">✏️ Eraser: OFF</button>
+            <button id="save-btn">💾 Save</button>
             <button id="clear-btn">Clear Page</button>
+            <button id="read-a-btn">🔊 Read Ans</button>
             <button id="prev-btn">⬅ Prev</button>
             <button id="next-btn">Next ➔</button>
             <button id="submit-btn" style="background-color: #27ae60; color: white;">Submit Exam</button>

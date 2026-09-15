@@ -56,12 +56,24 @@ body {
     padding: 24px;
     background-color: #2c3e50;
     color: white;
-    text-align: center;
+    text-align: left;
     border-bottom: 4px solid #3498db;
     display: flex;
     justify-content: space-between;
     align-items: center;
 }
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.util-btn {
+    background-color: #e67e22;
+    color: white;
+}
+.util-btn:hover { background-color: #d35400; }
 
 .status-indicators {
     font-size: 14px;
@@ -82,7 +94,6 @@ body {
     );
     background-position: 0 0;
     background-size: 100% 50px;
-    /* Boundary visual margin */
     border: 15px solid transparent; 
     transition: border-color 0.1s;
 }
@@ -98,6 +109,28 @@ canvas {
     cursor: crosshair;
 }
 
+.fab {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    background-color: #9b59b6;
+    color: white;
+    font-size: 30px;
+    border: none;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    z-index: 100;
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.1s;
+}
+.fab:active {
+    transform: scale(0.95);
+    background-color: #8e44ad;
+}
+
 #status-overlay {
     position: absolute;
     top: 50%;
@@ -111,6 +144,7 @@ canvas {
     font-size: 18px;
     pointer-events: none;
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    z-index: 200;
 }
 
 .hidden {
@@ -118,17 +152,18 @@ canvas {
 }
 
 .footer {
-    padding: 16px 24px;
+    padding: 12px;
     background-color: #ecf0f1;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
     border-top: 1px solid #bdc3c7;
 }
 
 button {
-    padding: 12px 24px;
-    font-size: 16px;
+    padding: 10px 18px;
+    font-size: 14px;
     border: none;
     border-radius: 8px;
     cursor: pointer;
@@ -136,20 +171,8 @@ button {
     transition: all 0.2s;
 }
 
-#next-btn, #prev-btn {
-    background-color: #3498db;
-    color: white;
-}
+#next-btn, #prev-btn { background-color: #3498db; color: white; }
+#next-btn:hover, #prev-btn:hover { background-color: #2980b9; }
 
-#next-btn:hover, #prev-btn:hover {
-    background-color: #2980b9;
-}
-
-#clear-btn {
-    background-color: #e74c3c;
-    color: white;
-}
-
-#clear-btn:hover {
-    background-color: #c0392b;
-}
+#clear-btn { background-color: #e74c3c; color: white; }
+#clear-btn:hover { background-color: #c0392b; }
