@@ -231,3 +231,20 @@ button {
 
 #clear-btn { background-color: #e74c3c; color: white; }
 #clear-btn:hover { background-color: #c0392b; }
+
+.tool-btn {
+    background-color: #ffffff;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+}
+
+.tool-btn:hover {
+    background-color: #f1f5f9;
+}
+
+.tool-btn.active-tool {
+    background-color: #f59e0b !important;
+    color: #0f172a !important;
+    border: 1px solid #d97706;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+}

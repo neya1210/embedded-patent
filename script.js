@@ -24,7 +24,9 @@ const canvasContainer = document.getElementById('canvas-container');
 const tamperAlert = document.getElementById('tamper-alert');
 const dismissTamperBtn = document.getElementById('dismiss-tamper-btn');
 
-const eraserBtn = document.getElementById('eraser-btn');
+const penBtn = document.getElementById('pen-btn');
+const wordEraserBtn = document.getElementById('word-eraser-btn');
+const freeEraserBtn = document.getElementById('free-eraser-btn');
 const saveBtn = document.getElementById('save-btn');
 const readQBtn = document.getElementById('read-q-btn');
 const readABtn = document.getElementById('read-a-btn');
@@ -34,12 +36,14 @@ const lineToggleBtn = document.getElementById('line-toggle-btn');
 const appContainer = document.querySelector('.app-container');
 
 // State variables
+let activeTool = 'pen'; // 'pen' | 'word-eraser' | 'free-eraser'
 let isDrawing = false;
 let isProcessingOCR = false;
 let lastKnownPoint = null; 
-let isEraserMode = false;
 let isPortraitSheet = true;
 let lineOrientation = 'horizontal';
+let lastDrawnX = 0;
+let lastDrawnY = 0;
 
 // Audio Context
 const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -95,6 +99,133 @@ function updateQuestion() {
     redrawStrokes();
 }
 
+// --- WORD ERASER HELPERS ---
+function getStrokeBounds(stroke) {
+    const pts = Array.isArray(stroke) ? stroke : (stroke.points || []);
+    if (!pts || pts.length === 0) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < pts.length; i++) {
+        const x = pts[i].x;
+        const y = pts[i].y;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+    }
+    return {
+        minX, maxX, minY, maxY,
+        width: Math.max(1, maxX - minX),
+        height: Math.max(1, maxY - minY),
+        centerX: (minX + maxX) / 2,
+        centerY: (minY + maxY) / 2
+    };
+}
+
+function distToStroke(x, y, stroke) {
+    const pts = Array.isArray(stroke) ? stroke : (stroke.points || []);
+    if (!pts || pts.length === 0) return Infinity;
+    
+    const b = getStrokeBounds(stroke);
+    if (!b) return Infinity;
+    
+    // Quick bounding box proximity check
+    if (x >= b.minX - 25 && x <= b.maxX + 25 && y >= b.minY - 25 && y <= b.maxY + 25) {
+        let minDist = Infinity;
+        for (let i = 0; i < pts.length; i++) {
+            const d = Math.hypot(pts[i].x - x, pts[i].y - y);
+            if (d < minDist) minDist = d;
+        }
+        return minDist;
+    }
+    
+    const dx = Math.max(b.minX - x, 0, x - b.maxX);
+    const dy = Math.max(b.minY - y, 0, y - b.maxY);
+    return Math.hypot(dx, dy);
+}
+
+function eraseWordAt(touchX, touchY) {
+    if (!currentStrokes || currentStrokes.length === 0) return false;
+
+    // Collect visible writing strokes
+    const strokeMeta = [];
+    for (let i = 0; i < currentStrokes.length; i++) {
+        const s = currentStrokes[i];
+        const isE = Array.isArray(s) ? false : !!s.isEraser;
+        if (isE) continue;
+        const b = getStrokeBounds(s);
+        if (!b) continue;
+        const d = distToStroke(touchX, touchY, s);
+        strokeMeta.push({
+            index: i,
+            stroke: s,
+            bounds: b,
+            dist: d
+        });
+    }
+
+    if (strokeMeta.length === 0) return false;
+
+    strokeMeta.sort((a, b) => a.dist - b.dist);
+    const closest = strokeMeta[0];
+
+    // Must be reasonably close to touched point (within 35px)
+    if (closest.dist > 35) return false;
+
+    // Cluster all strokes on the same line belonging to the touched word
+    const WORD_GAP_THRESHOLD = 32;
+    const LINE_Y_THRESHOLD = 26;
+
+    const wordIndices = new Set([closest.index]);
+    let added = true;
+
+    while (added) {
+        added = false;
+        for (let i = 0; i < strokeMeta.length; i++) {
+            const candidate = strokeMeta[i];
+            if (wordIndices.has(candidate.index)) continue;
+
+            for (const memberIdx of wordIndices) {
+                const member = strokeMeta.find(m => m.index === memberIdx);
+                if (!member) continue;
+
+                // Vertical line alignment check
+                const lineAligned = Math.abs(candidate.bounds.centerY - member.bounds.centerY) <= LINE_Y_THRESHOLD ||
+                    (candidate.bounds.minY <= member.bounds.maxY && candidate.bounds.maxY >= member.bounds.minY);
+
+                if (!lineAligned) continue;
+
+                // Horizontal gap between strokes
+                const horizGap = Math.max(0, 
+                    Math.max(candidate.bounds.minX, member.bounds.minX) - 
+                    Math.min(candidate.bounds.maxX, member.bounds.maxX)
+                );
+
+                if (horizGap <= WORD_GAP_THRESHOLD) {
+                    wordIndices.add(candidate.index);
+                    added = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Remove the whole word strokes
+    currentStrokes = currentStrokes.filter((_, idx) => !wordIndices.has(idx));
+    saveExamData();
+    redrawStrokes();
+
+    if (navigator.vibrate) navigator.vibrate([15, 25]);
+    playTone(320, 0.08, 0.05, 'triangle');
+
+    statusOverlay.textContent = "Word erased";
+    statusOverlay.classList.remove('hidden');
+    setTimeout(() => {
+        statusOverlay.classList.add('hidden');
+    }, 700);
+
+    return true;
+}
+
 function redrawStrokes() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -107,15 +238,31 @@ function redrawStrokes() {
         if (!pts || pts.length === 0) return;
         
         ctx.globalCompositeOperation = isE ? 'destination-out' : 'source-over';
-        ctx.lineWidth = isE ? 20 : 4;
+        ctx.lineWidth = isE ? 18 : 1.8;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#000000';
+        ctx.strokeStyle = '#0f172a';
+        ctx.fillStyle = '#0f172a';
+
+        if (pts.length === 1) {
+            ctx.beginPath();
+            ctx.arc(pts[0].x, pts[0].y, isE ? 9 : 0.9, 0, Math.PI * 2);
+            ctx.fill();
+            return;
+        }
 
         ctx.beginPath();
         ctx.moveTo(pts[0].x, pts[0].y);
-        for(let i = 1; i < pts.length; i++) {
-            ctx.lineTo(pts[i].x, pts[i].y);
+        
+        if (pts.length === 2) {
+            ctx.lineTo(pts[1].x, pts[1].y);
+        } else {
+            for (let i = 1; i < pts.length - 1; i++) {
+                const midX = (pts[i].x + pts[i + 1].x) / 2;
+                const midY = (pts[i].y + pts[i + 1].y) / 2;
+                ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+            }
+            ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
         }
         ctx.stroke();
     });
@@ -147,11 +294,24 @@ function loadExamData() {
 }
 
 // --- BUTTON LISTENERS ---
-eraserBtn.addEventListener('click', () => {
-    isEraserMode = !isEraserMode;
-    eraserBtn.textContent = isEraserMode ? '🧹 Eraser: ON' : '✏️ Eraser: OFF';
-    eraserBtn.style.backgroundColor = isEraserMode ? '#f39c12' : '';
-});
+function setActiveTool(tool) {
+    activeTool = tool;
+    if (penBtn) penBtn.classList.toggle('active-tool', tool === 'pen');
+    if (wordEraserBtn) wordEraserBtn.classList.toggle('active-tool', tool === 'word-eraser');
+    if (freeEraserBtn) freeEraserBtn.classList.toggle('active-tool', tool === 'free-eraser');
+    
+    if (tool === 'word-eraser') {
+        canvas.style.cursor = 'cell';
+    } else if (tool === 'free-eraser') {
+        canvas.style.cursor = 'grab';
+    } else {
+        canvas.style.cursor = 'crosshair';
+    }
+}
+
+if (penBtn) penBtn.addEventListener('click', () => setActiveTool('pen'));
+if (wordEraserBtn) wordEraserBtn.addEventListener('click', () => setActiveTool('word-eraser'));
+if (freeEraserBtn) freeEraserBtn.addEventListener('click', () => setActiveTool('free-eraser'));
 
 saveBtn.addEventListener('click', () => {
     saveExamData();
@@ -242,15 +402,40 @@ let touchStartX = null;
 let touchStartY = null;
 
 canvas.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'pen') {
+    // 1. Word Eraser tool: touch or click on any word to erase the entire word
+    if (activeTool === 'word-eraser') {
+        eraseWordAt(e.offsetX, e.offsetY);
+        e.preventDefault();
+        return;
+    }
+
+    // 2. Free Eraser tool or Stylus Pen writing
+    const isFreeEraser = (activeTool === 'free-eraser');
+    if (e.pointerType === 'pen' || isFreeEraser) {
         isDrawing = true;
-        currentStrokeObj = { isEraser: isEraserMode, points: [{x: e.offsetX, y: e.offsetY}] };
+        currentStrokeObj = { 
+            isEraser: isFreeEraser, 
+            points: [{x: e.offsetX, y: e.offsetY, p: e.pressure || 0.5, t: Date.now()}] 
+        };
+        lastDrawnX = e.offsetX;
+        lastDrawnY = e.offsetY;
+
+        ctx.globalCompositeOperation = isFreeEraser ? 'destination-out' : 'source-over';
+        const penWidth = isFreeEraser ? 18 : ((e.pressure && e.pressure > 0) ? (1.2 + e.pressure * 1.4) : 1.8);
+        ctx.lineWidth = penWidth;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#0f172a';
+        ctx.fillStyle = '#0f172a';
+
         ctx.beginPath();
-        ctx.moveTo(e.offsetX, e.offsetY);
+        ctx.arc(e.offsetX, e.offsetY, isFreeEraser ? 9 : (penWidth / 2), 0, Math.PI * 2);
+        ctx.fill();
         e.preventDefault();
         
-        if(navigator.vibrate) navigator.vibrate(10); 
+        if (navigator.vibrate) navigator.vibrate(10); 
     } 
+    // 3. Hand touch interaction (selective audio reading)
     else if (e.pointerType === 'touch' || e.pointerType === 'mouse') {
         touchStartX = e.offsetX;
         touchStartY = e.offsetY;
@@ -258,6 +443,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
+    // Writing Boundary Detection
     const margin = 30; 
     if (e.offsetX < margin || e.offsetX > canvas.width - margin ||
         e.offsetY < margin || e.offsetY > canvas.height - margin) {
@@ -268,6 +454,7 @@ canvas.addEventListener('pointermove', (e) => {
         canvasContainer.classList.remove('boundary-warning');
     }
 
+    // Resume-Point Guidance (Hovering Stylus)
     if (!isDrawing && e.pointerType === 'pen' && lastKnownPoint) {
         const dist = Math.hypot(e.offsetX - lastKnownPoint.x, e.offsetY - lastKnownPoint.y);
         if (dist < 50) {
@@ -276,25 +463,58 @@ canvas.addEventListener('pointermove', (e) => {
         }
     }
 
+    // Word Eraser swipe support (erases words along path while dragging)
+    if (activeTool === 'word-eraser' && e.buttons === 1) {
+        eraseWordAt(e.offsetX, e.offsetY);
+        return;
+    }
+
     if (!isDrawing) return;
     
-    if (e.pointerType === 'pen') {
-        ctx.globalCompositeOperation = isEraserMode ? 'destination-out' : 'source-over';
-        ctx.lineWidth = isEraserMode ? 20 : 4;
+    const isFreeEraser = (activeTool === 'free-eraser');
+    if (e.pointerType === 'pen' || isFreeEraser) {
+        ctx.globalCompositeOperation = isFreeEraser ? 'destination-out' : 'source-over';
+        const penWidth = isFreeEraser ? 18 : ((e.pressure && e.pressure > 0) ? (1.2 + e.pressure * 1.4) : 1.8);
+        ctx.lineWidth = penWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#000000';
+        ctx.strokeStyle = '#0f172a';
         
-        ctx.lineTo(e.offsetX, e.offsetY);
-        ctx.stroke();
-        
-        if (currentStrokeObj) currentStrokeObj.points.push({x: e.offsetX, y: e.offsetY});
+        if (currentStrokeObj) {
+            currentStrokeObj.points.push({x: e.offsetX, y: e.offsetY, p: e.pressure || 0.5, t: Date.now()});
+            const pts = currentStrokeObj.points;
+            
+            if (pts.length >= 3) {
+                const p0 = pts[pts.length - 2];
+                const p1 = pts[pts.length - 1];
+                const midX = (p0.x + p1.x) / 2;
+                const midY = (p0.y + p1.y) / 2;
+                ctx.beginPath();
+                ctx.moveTo(lastDrawnX, lastDrawnY);
+                ctx.quadraticCurveTo(p0.x, p0.y, midX, midY);
+                ctx.stroke();
+                lastDrawnX = midX;
+                lastDrawnY = midY;
+            } else {
+                ctx.beginPath();
+                ctx.moveTo(lastDrawnX, lastDrawnY);
+                ctx.lineTo(e.offsetX, e.offsetY);
+                ctx.stroke();
+                lastDrawnX = e.offsetX;
+                lastDrawnY = e.offsetY;
+            }
+        }
         e.preventDefault();
     }
 });
 
 canvas.addEventListener('pointerup', (e) => {
-    if (e.pointerType === 'pen') {
+    if (activeTool === 'word-eraser') {
+        return;
+    }
+
+    const isFreeEraser = (activeTool === 'free-eraser');
+    if (e.pointerType === 'pen' || isFreeEraser) {
         isDrawing = false;
         ctx.closePath();
         
