@@ -143,8 +143,8 @@ function distToStroke(x, y, stroke) {
     return Math.hypot(dx, dy);
 }
 
-function eraseWordAt(touchX, touchY) {
-    if (!currentStrokes || currentStrokes.length === 0) return false;
+function getWordStrokesAt(touchX, touchY, maxTouchDist = 45) {
+    if (!currentStrokes || currentStrokes.length === 0) return null;
 
     // Collect visible writing strokes
     const strokeMeta = [];
@@ -163,15 +163,15 @@ function eraseWordAt(touchX, touchY) {
         });
     }
 
-    if (strokeMeta.length === 0) return false;
+    if (strokeMeta.length === 0) return null;
 
     strokeMeta.sort((a, b) => a.dist - b.dist);
     const closest = strokeMeta[0];
 
-    // Must be reasonably close to touched point (within 35px)
-    if (closest.dist > 35) return false;
+    // Must be reasonably close to touched point
+    if (closest.dist > maxTouchDist) return null;
 
-    // Cluster all strokes on the same line belonging to the touched word
+    // Cluster all strokes on the same line belonging to this word
     const WORD_GAP_THRESHOLD = 32;
     const LINE_Y_THRESHOLD = 26;
 
@@ -209,8 +209,37 @@ function eraseWordAt(touchX, touchY) {
         }
     }
 
+    const matchedStrokes = [];
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+    wordIndices.forEach(idx => {
+        const item = strokeMeta.find(m => m.index === idx);
+        if (item) {
+            matchedStrokes.push(item.stroke);
+            if (item.bounds.minX < minX) minX = item.bounds.minX;
+            if (item.bounds.maxX > maxX) maxX = item.bounds.maxX;
+            if (item.bounds.minY < minY) minY = item.bounds.minY;
+            if (item.bounds.maxY > maxY) maxY = item.bounds.maxY;
+        }
+    });
+
+    return {
+        indices: wordIndices,
+        strokes: matchedStrokes,
+        bounds: {
+            minX, maxX, minY, maxY,
+            width: Math.max(10, maxX - minX),
+            height: Math.max(10, maxY - minY)
+        }
+    };
+}
+
+function eraseWordAt(touchX, touchY) {
+    const wordInfo = getWordStrokesAt(touchX, touchY, 35);
+    if (!wordInfo) return false;
+
     // Remove the whole word strokes
-    currentStrokes = currentStrokes.filter((_, idx) => !wordIndices.has(idx));
+    currentStrokes = currentStrokes.filter((_, idx) => !wordInfo.indices.has(idx));
     saveExamData();
     redrawStrokes();
 
@@ -557,150 +586,246 @@ submitBtn.addEventListener('click', () => {
 });
 
 
-// --- OCR (Handwriting to Text) AND TTS (Text to Speech) ---
+// --- HIGH-PRECISION HANDWRITING RECOGNITION (GOOGLE DIGITAL INK + ISOLATED TESSERACT) ---
 
-// Screen Tap/Drag to Read Segment
-async function readWrittenText(startX, startY, endX, endY) {
-    isProcessingOCR = true;
-    statusOverlay.textContent = "Analyzing touched area...";
-    statusOverlay.classList.remove('hidden');
+// 1. Google Digital Ink Engine (Gold standard for English cursive & capitals)
+async function recognizeHandwritingWithGoogle(strokes) {
+    if (!strokes || strokes.length === 0) return null;
     
+    const ink = [];
+    let baseTime = Date.now();
+    
+    strokes.forEach(s => {
+        const pts = Array.isArray(s) ? s : (s.points || []);
+        if (!pts || pts.length === 0 || s.isEraser) return;
+        const xs = [];
+        const ys = [];
+        const ts = [];
+        pts.forEach((p, i) => {
+            xs.push(Math.round(p.x));
+            ys.push(Math.round(p.y));
+            ts.push(p.t ? Math.max(0, p.t - baseTime) : (i * 20));
+        });
+        if (xs.length > 0) ink.push([xs, ys, ts]);
+    });
+
+    if (ink.length === 0) return null;
+
+    const requestBody = {
+        app_version: 0.4,
+        api_level: "533.0",
+        device: "desktop",
+        input_type: "0",
+        options: "enable_pre_space",
+        requests: [{
+            writer_id: "stylus-notebook",
+            ink: ink,
+            language: "en"
+        }]
+    };
+
     try {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.fillStyle = 'white';
-        tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-        tempCtx.drawImage(canvas, 0, 0);
-
-        const dataUrl = tempCanvas.toDataURL('image/png');
-        const result = await Tesseract.recognize(dataUrl, 'eng');
-        const words = result.data.words;
+        const response = await fetch("https://inputtools.google.com/request?itc=en-t-i0-handwrit&app=translate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody)
+        });
         
-        let textToRead = "";
-
-        if (words && words.length > 0) {
-            let startIndex = 0;
-            let endIndex = words.length - 1;
-
-            if (startX !== undefined && startY !== undefined) {
-                let minStartDist = Infinity;
-                let minEndDist = Infinity;
-                
-                const isDrag = endX !== undefined && endY !== undefined && Math.hypot(endX - startX, endY - startY) > 20;
-
-                words.forEach((word, index) => {
-                    const rect = word.bbox; 
-                    const centerX = rect.x0 + (rect.x1 - rect.x0) / 2;
-                    const centerY = rect.y0 + (rect.y1 - rect.y0) / 2;
-
-                    // Match Start Coordinate
-                    if (startX >= rect.x0 && startX <= rect.x1 && startY >= rect.y0 && startY <= rect.y1) {
-                        startIndex = index;
-                        minStartDist = -1; 
-                    } else if (minStartDist !== -1) {
-                        const dist = Math.hypot(centerX - startX, centerY - startY);
-                        if (dist < minStartDist) { minStartDist = dist; startIndex = index; }
-                    }
-
-                    // Match End Coordinate if it was a drag
-                    if (isDrag) {
-                        if (endX >= rect.x0 && endX <= rect.x1 && endY >= rect.y0 && endY <= rect.y1) {
-                            endIndex = index;
-                            minEndDist = -1; 
-                        } else if (minEndDist !== -1) {
-                            const dist = Math.hypot(centerX - endX, centerY - endY);
-                            if (dist < minEndDist) { minEndDist = dist; endIndex = index; }
-                        }
-                    }
-                });
-                
-                if (minStartDist > 100 && minStartDist !== -1) {
-                    textToRead = ""; // Ignored tap/drag far away from text
-                } else {
-                    if (isDrag) {
-                        // Ensure chronological order
-                        if (startIndex > endIndex) {
-                            let temp = startIndex;
-                            startIndex = endIndex;
-                            endIndex = temp;
-                        }
-                        textToRead = words.slice(startIndex, endIndex + 1).map(w => w.text).join(' ').trim();
-                    } else {
-                        // Tap only: Read EXACTLY the single touched word
-                        textToRead = words[startIndex].text;
-                    }
-                }
-            } else {
-                textToRead = result.data.text.trim();
+        if (!response.ok) return null;
+        const data = await response.json();
+        
+        if (data && data[0] === "SUCCESS" && data[1] && data[1][0] && data[1][0][1]) {
+            const candidates = data[1][0][1];
+            if (candidates && candidates.length > 0) {
+                return candidates[0]; // Best recognized match
             }
         }
-        
-        if (textToRead && textToRead.trim().length > 0) {
-            statusOverlay.textContent = "Speaking...";
+    } catch (e) {
+        console.warn("Google Ink API unavailable, falling back to local isolated Tesseract:", e);
+    }
+    return null;
+}
+
+// 2. Local Isolated Tesseract Fallback (Offline crop-isolated recognition)
+async function recognizeStrokesWithTesseract(strokes, bounds, isSingleWord) {
+    if (!strokes || strokes.length === 0) return "";
+    
+    const pad = 30;
+    const b = bounds || {
+        minX: Math.min(...strokes.flatMap(s => (s.points || s).map(p => p.x))),
+        maxX: Math.max(...strokes.flatMap(s => (s.points || s).map(p => p.x))),
+        minY: Math.min(...strokes.flatMap(s => (s.points || s).map(p => p.y))),
+        maxY: Math.max(...strokes.flatMap(s => (s.points || s).map(p => p.y)))
+    };
+    
+    const cropW = Math.max(20, (b.maxX - b.minX) + pad * 2);
+    const cropH = Math.max(20, (b.maxY - b.minY) + pad * 2);
+    const scale = 2.5;
+
+    // Render ONLY the targeted strokes onto an isolated high-contrast canvas
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = cropW * scale;
+    cropCanvas.height = cropH * scale;
+    const cctx = cropCanvas.getContext('2d');
+
+    cctx.fillStyle = '#ffffff';
+    cctx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+
+    cctx.lineWidth = 5 * scale;
+    cctx.lineCap = 'round';
+    cctx.lineJoin = 'round';
+    cctx.strokeStyle = '#000000';
+
+    strokes.forEach(s => {
+        const pts = Array.isArray(s) ? s : (s.points || []);
+        if (!pts || pts.length === 0 || s.isEraser) return;
+
+        cctx.beginPath();
+        const startX = (pts[0].x - b.minX + pad) * scale;
+        const startY = (pts[0].y - b.minY + pad) * scale;
+        cctx.moveTo(startX, startY);
+
+        for (let i = 1; i < pts.length; i++) {
+            const px = (pts[i].x - b.minX + pad) * scale;
+            const py = (pts[i].y - b.minY + pad) * scale;
+            cctx.lineTo(px, py);
+        }
+        cctx.stroke();
+    });
+
+    const dataUrl = cropCanvas.toDataURL('image/png');
+    // PSM 8 = Single Word, PSM 7 = Single text line
+    const result = await Tesseract.recognize(dataUrl, 'eng', {
+        tessedit_pageseg_mode: isSingleWord ? '8' : '7'
+    });
+    
+    return result.data.text.trim();
+}
+
+// Master Recognizer
+async function recognizeStrokes(strokes, bounds, singleWordOnly = false) {
+    // Try Google Digital Ink Recognition first
+    let text = await recognizeHandwritingWithGoogle(strokes);
+    
+    // Fallback to local isolated Tesseract
+    if (!text || text.trim().length === 0) {
+        text = await recognizeStrokesWithTesseract(strokes, bounds, singleWordOnly);
+    }
+    
+    if (!text) return "";
+    text = text.trim();
+    if (singleWordOnly) {
+        // Guarantee strictly only the single touched word is returned
+        text = text.split(/\s+/)[0];
+    }
+    return text;
+}
+
+// Screen Tap / Drag to Read ONLY the Touched Word or Selection
+async function readWrittenText(startX, startY, endX, endY) {
+    isProcessingOCR = true;
+    statusOverlay.textContent = "Recognizing touched word...";
+    statusOverlay.classList.remove('hidden');
+
+    try {
+        const isDrag = endX !== undefined && endY !== undefined && Math.hypot(endX - startX, endY - startY) > 20;
+
+        let selectedStrokes = [];
+        let selectedBounds = null;
+
+        if (isDrag) {
+            // Drag: select strokes strictly within touched area
+            const minSelX = Math.min(startX, endX) - 20;
+            const maxSelX = Math.max(startX, endX) + 20;
+            const minSelY = Math.min(startY, endY) - 30;
+            const maxSelY = Math.max(startY, endY) + 30;
+
+            selectedStrokes = currentStrokes.filter(s => {
+                if (s.isEraser) return false;
+                const b = getStrokeBounds(s);
+                if (!b) return false;
+                return b.centerX >= minSelX && b.centerX <= maxSelX &&
+                       b.centerY >= minSelY && b.centerY <= maxSelY;
+            });
+        } else {
+            // Single Tap: strictly isolate and read ONLY that single touched word
+            const wordInfo = getWordStrokesAt(startX, startY, 45);
+            if (wordInfo) {
+                selectedStrokes = wordInfo.strokes;
+                selectedBounds = wordInfo.bounds;
+            }
+        }
+
+        if (selectedStrokes.length === 0) {
+            statusOverlay.textContent = "No word found at touched area.";
+            setTimeout(() => { statusOverlay.classList.add('hidden'); }, 1500);
+            return;
+        }
+
+        const textToRead = await recognizeStrokes(selectedStrokes, selectedBounds, !isDrag);
+
+        if (textToRead && textToRead.length > 0) {
+            statusOverlay.textContent = `Speaking: "${textToRead}"`;
             speak(textToRead);
         } else {
-            statusOverlay.textContent = "No text found at touched area.";
-            setTimeout(() => { statusOverlay.classList.add('hidden'); }, 2000);
+            statusOverlay.textContent = "Could not recognize word.";
+            setTimeout(() => { statusOverlay.classList.add('hidden'); }, 1500);
         }
     } catch (error) {
-        console.error("OCR Error:", error);
+        console.error("Recognition Error:", error);
         statusOverlay.textContent = "Error reading text.";
-        setTimeout(() => { statusOverlay.classList.add('hidden'); }, 2000);
+        setTimeout(() => { statusOverlay.classList.add('hidden'); }, 1500);
     } finally {
         isProcessingOCR = false;
     }
 }
 
-// Read whole canvas for Round Key modes
+// Read Canvas for Round Key (FAB) modes & Read Ans button
 async function readCanvasText(mode) {
+    const visibleStrokes = currentStrokes.filter(s => !s.isEraser && (s.points || s).length > 0);
+    if (visibleStrokes.length === 0) {
+        statusOverlay.textContent = "No writing on page.";
+        statusOverlay.classList.remove('hidden');
+        setTimeout(() => { statusOverlay.classList.add('hidden'); }, 1500);
+        return;
+    }
+
     isProcessingOCR = true;
-    statusOverlay.textContent = "Analyzing canvas...";
+    statusOverlay.textContent = "Reading answer...";
     statusOverlay.classList.remove('hidden');
-    
+
     try {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.fillStyle = 'white';
-        tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-        tempCtx.drawImage(canvas, 0, 0);
+        let strokesToRead = visibleStrokes;
 
-        const dataUrl = tempCanvas.toDataURL('image/png');
-        const result = await Tesseract.recognize(dataUrl, 'eng');
-        
-        let textToRead = "";
-        const fullText = result.data.text.trim();
-
-        if (mode === 'all') {
-            textToRead = fullText;
-        } else if (mode === 'line') {
-            if (result.data.lines && result.data.lines.length > 0) {
-                textToRead = result.data.lines[result.data.lines.length - 1].text.trim();
-            }
+        if (mode === 'line') {
+            // Read strokes on the bottommost / current text line
+            let maxCenterY = -Infinity;
+            visibleStrokes.forEach(s => {
+                const b = getStrokeBounds(s);
+                if (b && b.centerY > maxCenterY) maxCenterY = b.centerY;
+            });
+            strokesToRead = visibleStrokes.filter(s => {
+                const b = getStrokeBounds(s);
+                return b && Math.abs(b.centerY - maxCenterY) <= 30;
+            });
         } else if (mode === 'sentence') {
-            const sentences = fullText.split(/(?<=[.!?])\s+/);
-            if (sentences.length > 0) {
-                textToRead = sentences[sentences.length - 1].trim();
-                if (!textToRead && result.data.lines) {
-                    textToRead = result.data.lines[result.data.lines.length - 1].text.trim();
-                }
-            }
+            // Read last written word / segment
+            strokesToRead = visibleStrokes.slice(-Math.min(visibleStrokes.length, 5));
         }
-        
-        if (textToRead.length > 0) {
-            statusOverlay.textContent = "Speaking...";
+
+        const textToRead = await recognizeStrokes(strokesToRead, null, false);
+
+        if (textToRead && textToRead.length > 0) {
+            statusOverlay.textContent = `Speaking: "${textToRead}"`;
             speak(textToRead);
         } else {
-            statusOverlay.textContent = "No writing detected.";
-            setTimeout(() => { statusOverlay.classList.add('hidden'); }, 2000);
+            statusOverlay.textContent = "No text recognized.";
+            setTimeout(() => { statusOverlay.classList.add('hidden'); }, 1500);
         }
     } catch (error) {
-        console.error("OCR Error:", error);
+        console.error("Read Canvas Error:", error);
         statusOverlay.textContent = "Error reading text.";
-        setTimeout(() => { statusOverlay.classList.add('hidden'); }, 2000);
+        setTimeout(() => { statusOverlay.classList.add('hidden'); }, 1500);
     } finally {
         isProcessingOCR = false;
     }
@@ -710,6 +835,9 @@ function speak(text) {
     if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel(); 
         const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'en-US';
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
         utterance.onend = () => { statusOverlay.classList.add('hidden'); };
         utterance.onerror = () => { statusOverlay.classList.add('hidden'); };
         window.speechSynthesis.speak(utterance);
