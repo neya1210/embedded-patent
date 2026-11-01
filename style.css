@@ -6,49 +6,155 @@
 }
 
 body {
-    background-color: #f0f2f5;
+    background-color: #e2e8f0;
     display: flex;
     justify-content: center;
     align-items: center;
-    /* Use dynamic viewport height (dvh) so mobile browsers don't hide the top/bottom */
     height: 100dvh; 
     width: 100vw;
-    /* Prevent accidental scrolling/refreshing on touch devices */
     overflow: hidden;
     touch-action: none; 
 }
 
+#tamper-alert {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(231, 76, 60, 0.95);
+    color: white;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+
+#tamper-alert h2 {
+    font-size: 48px;
+    margin-bottom: 20px;
+}
+
+#dismiss-tamper-btn {
+    margin-top: 30px;
+    background: white;
+    color: #c0392b;
+    padding: 15px 30px;
+    font-size: 20px;
+}
+
 .app-container {
-    width: 100vw;
+    width: 100%;
     height: 100dvh;
     background-color: #ffffff;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    margin: 0 auto;
+    transition: max-width 0.25s ease;
+}
+
+.app-container.portrait-sheet {
+    max-width: 768px; /* Standard portrait tablet / notebook sheet width */
+    box-shadow: 0 0 35px rgba(0, 0, 0, 0.15);
+}
+
+.app-container.landscape-sheet {
+    max-width: 100vw;
+}
+
+@media (min-width: 820px) and (min-height: 650px) {
+    .app-container.portrait-sheet {
+        height: 98dvh;
+        border-radius: 12px;
+        border: 1px solid #cbd5e1;
+    }
 }
 
 .header {
-    flex-shrink: 0; /* Prevent the question from being squished or hidden */
-    padding: 24px;
+    flex-shrink: 0;
+    padding: 14px 18px;
     background-color: #2c3e50;
     color: white;
-    text-align: center;
+    text-align: left;
     border-bottom: 4px solid #3498db;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.header h2 {
+    font-size: 1.15rem;
+    flex: 1 1 200px;
+    margin: 0;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.util-btn {
+    background-color: #e67e22;
+    color: white;
+}
+.util-btn:hover { background-color: #d35400; }
+
+.status-indicators {
+    font-size: 13px;
+    background: #34495e;
+    padding: 5px 10px;
+    border-radius: 12px;
 }
 
 .canvas-container {
     flex-grow: 1;
     position: relative;
-    /* Create ruled lines for handwriting guidance */
-    background-color: white;
-    background-image: repeating-linear-gradient(
-        transparent,
-        transparent 49px,
-        #a0aec0 49px,
-        #a0aec0 50px
-    );
+    background-color: #ffffff;
+    border: 15px solid transparent; 
+    transition: border-color 0.1s;
+}
+
+/* Portrait notebook ruled lines (Horizontal lines with classic red left margin) */
+.canvas-container.ruled-horizontal {
+    background-color: #ffffff;
+    background-image: 
+        /* Left vertical red margin line of notebook paper */
+        linear-gradient(90deg, transparent 55px, #f87171 55px, #f87171 57px, transparent 57px),
+        /* Horizontal ruled lines */
+        repeating-linear-gradient(
+            transparent,
+            transparent 39px,
+            #cbd5e1 39px,
+            #cbd5e1 40px
+        );
     background-position: 0 0;
-    background-size: 100% 50px;
+    background-size: 100% 100%, 100% 40px;
+}
+
+/* Vertical ruled lines in portrait manner */
+.canvas-container.ruled-vertical {
+    background-color: #ffffff;
+    background-image: 
+        /* Top red margin line */
+        linear-gradient(180deg, transparent 45px, #f87171 45px, #f87171 47px, transparent 47px),
+        /* Vertical ruled lines */
+        repeating-linear-gradient(
+            90deg,
+            transparent,
+            transparent 39px,
+            #cbd5e1 39px,
+            #cbd5e1 40px
+        );
+    background-position: 0 0;
+    background-size: 100% 100%, 40px 100%;
+}
+
+.canvas-container.boundary-warning {
+    border-color: rgba(231, 76, 60, 0.5);
 }
 
 canvas {
@@ -56,6 +162,28 @@ canvas {
     height: 100%;
     display: block;
     cursor: crosshair;
+}
+
+.fab {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    background-color: #9b59b6;
+    color: white;
+    font-size: 30px;
+    border: none;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    z-index: 100;
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.1s;
+}
+.fab:active {
+    transform: scale(0.95);
+    background-color: #8e44ad;
 }
 
 #status-overlay {
@@ -71,6 +199,7 @@ canvas {
     font-size: 18px;
     pointer-events: none;
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    z-index: 200;
 }
 
 .hidden {
@@ -78,38 +207,61 @@ canvas {
 }
 
 .footer {
-    padding: 16px 24px;
-    background-color: #ecf0f1;
+    padding: 10px 14px;
+    background-color: #f1f5f9;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-top: 1px solid #bdc3c7;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    border-top: 1px solid #cbd5e1;
 }
 
 button {
-    padding: 12px 24px;
-    font-size: 16px;
+    padding: 10px 16px;
+    min-height: 44px;
+    font-size: 14px;
     border: none;
     border-radius: 8px;
     cursor: pointer;
-    font-weight: bold;
-    transition: all 0.2s;
+    font-weight: 600;
+    transition: all 0.15s ease;
+    user-select: none;
 }
 
-#next-btn {
-    background-color: #3498db;
-    color: white;
+#next-btn, #prev-btn { background-color: #3b82f6; color: white; }
+#next-btn:hover, #prev-btn:hover { background-color: #2563eb; }
+
+#clear-btn { background-color: #ef4444; color: white; }
+#clear-btn:hover { background-color: #dc2626; }
+
+.tool-btn {
+    background-color: #ffffff;
+    color: #1e293b;
+    border: 1.5px solid #cbd5e1;
+    font-weight: 700;
 }
 
-#next-btn:hover {
-    background-color: #2980b9;
+.tool-btn:hover {
+    background-color: #f8fafc;
 }
 
-#clear-btn {
-    background-color: #e74c3c;
-    color: white;
+.tool-btn.active-tool {
+    background-color: #f59e0b !important;
+    color: #0f172a !important;
+    border: 1.5px solid #b45309 !important;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.4) !important;
 }
 
-#clear-btn:hover {
-    background-color: #c0392b;
+#eraser-btn.active-tool {
+    background-color: #f43f5e !important;
+    color: #ffffff !important;
+    border: 1.5px solid #be123c !important;
+    box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.35) !important;
+}
+
+#read-word-btn.active-tool {
+    background-color: #8b5cf6 !important;
+    color: #ffffff !important;
+    border: 1.5px solid #6d28d9 !important;
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.35) !important;
 }
