@@ -17,18 +17,20 @@
         <button id="dismiss-tamper-btn">Acknowledge</button>
     </div>
 
-    <div class="app-container">
+    <div class="app-container portrait-sheet">
         <!-- Question Section -->
         <div class="header">
             <h2 id="question-text">Loading...</h2>
             <div class="header-right">
+                <button id="orientation-btn" class="util-btn" title="Toggle Sheet Orientation">📱 Portrait Sheet</button>
+                <button id="line-toggle-btn" class="util-btn" title="Toggle Line Direction">📏 Lines: Horiz</button>
                 <button id="read-q-btn" class="util-btn">🔊 Read Question</button>
                 <span id="sync-status" class="status-indicators">Offline - Secure</span>
             </div>
         </div>
         
         <!-- Canvas Section -->
-        <div class="canvas-container" id="canvas-container">
+        <div class="canvas-container ruled-horizontal" id="canvas-container">
             <canvas id="drawing-canvas"></canvas>
             
             <!-- Round Key FAB -->

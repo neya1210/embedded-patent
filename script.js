@@ -24,18 +24,22 @@ const canvasContainer = document.getElementById('canvas-container');
 const tamperAlert = document.getElementById('tamper-alert');
 const dismissTamperBtn = document.getElementById('dismiss-tamper-btn');
 
-// New UI Elements
 const eraserBtn = document.getElementById('eraser-btn');
 const saveBtn = document.getElementById('save-btn');
 const readQBtn = document.getElementById('read-q-btn');
 const readABtn = document.getElementById('read-a-btn');
 const roundKey = document.getElementById('round-key');
+const orientationBtn = document.getElementById('orientation-btn');
+const lineToggleBtn = document.getElementById('line-toggle-btn');
+const appContainer = document.querySelector('.app-container');
 
 // State variables
 let isDrawing = false;
 let isProcessingOCR = false;
 let lastKnownPoint = null; 
 let isEraserMode = false;
+let isPortraitSheet = true;
+let lineOrientation = 'horizontal';
 
 // Audio Context
 const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -161,6 +165,38 @@ readQBtn.addEventListener('click', () => {
 readABtn.addEventListener('click', () => {
     readCanvasText('all');
 });
+
+if (orientationBtn) {
+    orientationBtn.addEventListener('click', () => {
+        isPortraitSheet = !isPortraitSheet;
+        if (isPortraitSheet) {
+            appContainer.classList.add('portrait-sheet');
+            appContainer.classList.remove('landscape-sheet');
+            orientationBtn.textContent = '📱 Portrait Sheet';
+        } else {
+            appContainer.classList.remove('portrait-sheet');
+            appContainer.classList.add('landscape-sheet');
+            orientationBtn.textContent = '🖥️ Landscape Sheet';
+        }
+        setTimeout(resizeCanvas, 50);
+    });
+}
+
+if (lineToggleBtn) {
+    lineToggleBtn.addEventListener('click', () => {
+        if (lineOrientation === 'horizontal') {
+            lineOrientation = 'vertical';
+            canvasContainer.classList.remove('ruled-horizontal');
+            canvasContainer.classList.add('ruled-vertical');
+            lineToggleBtn.textContent = '📏 Lines: Vert';
+        } else {
+            lineOrientation = 'horizontal';
+            canvasContainer.classList.remove('ruled-vertical');
+            canvasContainer.classList.add('ruled-horizontal');
+            lineToggleBtn.textContent = '📏 Lines: Horiz';
+        }
+    });
+}
 
 // --- ROUND KEY (FAB) LOGIC ---
 let roundKeyTapCount = 0;
