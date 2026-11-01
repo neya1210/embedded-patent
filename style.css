@@ -207,44 +207,61 @@ canvas {
 }
 
 .footer {
-    padding: 12px;
-    background-color: #ecf0f1;
+    padding: 10px 14px;
+    background-color: #f1f5f9;
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 10px;
-    border-top: 1px solid #bdc3c7;
+    gap: 8px;
+    border-top: 1px solid #cbd5e1;
 }
 
 button {
-    padding: 10px 18px;
+    padding: 10px 16px;
+    min-height: 44px;
     font-size: 14px;
     border: none;
     border-radius: 8px;
     cursor: pointer;
-    font-weight: bold;
-    transition: all 0.2s;
+    font-weight: 600;
+    transition: all 0.15s ease;
+    user-select: none;
 }
 
-#next-btn, #prev-btn { background-color: #3498db; color: white; }
-#next-btn:hover, #prev-btn:hover { background-color: #2980b9; }
+#next-btn, #prev-btn { background-color: #3b82f6; color: white; }
+#next-btn:hover, #prev-btn:hover { background-color: #2563eb; }
 
-#clear-btn { background-color: #e74c3c; color: white; }
-#clear-btn:hover { background-color: #c0392b; }
+#clear-btn { background-color: #ef4444; color: white; }
+#clear-btn:hover { background-color: #dc2626; }
 
 .tool-btn {
     background-color: #ffffff;
-    color: #334155;
-    border: 1px solid #cbd5e1;
+    color: #1e293b;
+    border: 1.5px solid #cbd5e1;
+    font-weight: 700;
 }
 
 .tool-btn:hover {
-    background-color: #f1f5f9;
+    background-color: #f8fafc;
 }
 
 .tool-btn.active-tool {
     background-color: #f59e0b !important;
     color: #0f172a !important;
-    border: 1px solid #d97706;
-    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
+    border: 1.5px solid #b45309 !important;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.4) !important;
+}
+
+#eraser-btn.active-tool {
+    background-color: #f43f5e !important;
+    color: #ffffff !important;
+    border: 1.5px solid #be123c !important;
+    box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.35) !important;
+}
+
+#read-word-btn.active-tool {
+    background-color: #8b5cf6 !important;
+    color: #ffffff !important;
+    border: 1.5px solid #6d28d9 !important;
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.35) !important;
 }
