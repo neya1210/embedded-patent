@@ -143,93 +143,92 @@ function distToStroke(x, y, stroke) {
     return Math.hypot(dx, dy);
 }
 
-function getWordStrokesAt(touchX, touchY, maxTouchDist = 45) {
+function getWordStrokesAt(touchX, touchY, maxTouchDist = 55) {
     if (!currentStrokes || currentStrokes.length === 0) return null;
 
-    // Collect visible writing strokes
-    const strokeMeta = [];
+    // ---------------------------------------------------------------
+    // Step 1: Segment strokes into WORDS by TIME GAP.
+    // A pause > 600ms between strokes = new word. This is exact and
+    // doesn't depend on spatial proximity at all.
+    // ---------------------------------------------------------------
+    const visibleStrokes = [];
     for (let i = 0; i < currentStrokes.length; i++) {
         const s = currentStrokes[i];
         const isE = Array.isArray(s) ? false : !!s.isEraser;
         if (isE) continue;
         const b = getStrokeBounds(s);
         if (!b) continue;
-        const d = distToStroke(touchX, touchY, s);
-        strokeMeta.push({
-            index: i,
-            stroke: s,
-            bounds: b,
-            dist: d
-        });
+        const pts = Array.isArray(s) ? s : (s.points || []);
+        const firstT = (pts[0] && pts[0].t) ? pts[0].t : null;
+        const lastT = (pts[pts.length - 1] && pts[pts.length - 1].t) ? pts[pts.length - 1].t : null;
+        visibleStrokes.push({ index: i, stroke: s, bounds: b, firstT, lastT });
     }
 
-    if (strokeMeta.length === 0) return null;
+    if (visibleStrokes.length === 0) return null;
 
-    strokeMeta.sort((a, b) => a.dist - b.dist);
-    const closest = strokeMeta[0];
+    // Group strokes into word-groups by time gap
+    const WORD_TIME_GAP_MS = 600; // pause > 600ms = new word
+    const wordGroups = [];
+    let currentGroup = [visibleStrokes[0]];
 
-    // Must be reasonably close to touched point
-    if (closest.dist > maxTouchDist) return null;
+    for (let i = 1; i < visibleStrokes.length; i++) {
+        const prev = visibleStrokes[i - 1];
+        const curr = visibleStrokes[i];
+        const prevEnd = prev.lastT;
+        const currStart = curr.firstT;
+        const gap = (prevEnd !== null && currStart !== null) ? (currStart - prevEnd) : 0;
 
-    // Cluster all strokes on the same line belonging to this word
-    const WORD_GAP_THRESHOLD = 32;
-    const LINE_Y_THRESHOLD = 26;
-
-    const wordIndices = new Set([closest.index]);
-    let added = true;
-
-    while (added) {
-        added = false;
-        for (let i = 0; i < strokeMeta.length; i++) {
-            const candidate = strokeMeta[i];
-            if (wordIndices.has(candidate.index)) continue;
-
-            for (const memberIdx of wordIndices) {
-                const member = strokeMeta.find(m => m.index === memberIdx);
-                if (!member) continue;
-
-                // Vertical line alignment check
-                const lineAligned = Math.abs(candidate.bounds.centerY - member.bounds.centerY) <= LINE_Y_THRESHOLD ||
-                    (candidate.bounds.minY <= member.bounds.maxY && candidate.bounds.maxY >= member.bounds.minY);
-
-                if (!lineAligned) continue;
-
-                // Horizontal gap between strokes
-                const horizGap = Math.max(0, 
-                    Math.max(candidate.bounds.minX, member.bounds.minX) - 
-                    Math.min(candidate.bounds.maxX, member.bounds.maxX)
-                );
-
-                if (horizGap <= WORD_GAP_THRESHOLD) {
-                    wordIndices.add(candidate.index);
-                    added = true;
-                    break;
-                }
-            }
+        if (gap > WORD_TIME_GAP_MS) {
+            wordGroups.push(currentGroup);
+            currentGroup = [curr];
+        } else {
+            currentGroup.push(curr);
         }
     }
+    wordGroups.push(currentGroup);
 
-    const matchedStrokes = [];
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    // ---------------------------------------------------------------
+    // Step 2: Find the word-group whose bounding box is closest
+    //         to the touch point.
+    // ---------------------------------------------------------------
+    let bestGroup = null;
+    let bestDist = Infinity;
 
-    wordIndices.forEach(idx => {
-        const item = strokeMeta.find(m => m.index === idx);
-        if (item) {
-            matchedStrokes.push(item.stroke);
+    for (const group of wordGroups) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        group.forEach(item => {
             if (item.bounds.minX < minX) minX = item.bounds.minX;
             if (item.bounds.maxX > maxX) maxX = item.bounds.maxX;
             if (item.bounds.minY < minY) minY = item.bounds.minY;
             if (item.bounds.maxY > maxY) maxY = item.bounds.maxY;
+        });
+
+        // Distance from touch point to this word's bounding box
+        const dx = Math.max(minX - touchX, 0, touchX - maxX);
+        const dy = Math.max(minY - touchY, 0, touchY - maxY);
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestGroup = { group, minX, maxX, minY, maxY };
         }
-    });
+    }
+
+    if (!bestGroup || bestDist > maxTouchDist) return null;
+
+    const matchedStrokes = bestGroup.group.map(item => item.stroke);
+    const wordIndices = new Set(bestGroup.group.map(item => item.index));
 
     return {
         indices: wordIndices,
         strokes: matchedStrokes,
         bounds: {
-            minX, maxX, minY, maxY,
-            width: Math.max(10, maxX - minX),
-            height: Math.max(10, maxY - minY)
+            minX: bestGroup.minX,
+            maxX: bestGroup.maxX,
+            minY: bestGroup.minY,
+            maxY: bestGroup.maxY,
+            width: Math.max(10, bestGroup.maxX - bestGroup.minX),
+            height: Math.max(10, bestGroup.maxY - bestGroup.minY)
         }
     };
 }
@@ -267,11 +266,11 @@ function redrawStrokes() {
         if (!pts || pts.length === 0) return;
         
         ctx.globalCompositeOperation = isE ? 'destination-out' : 'source-over';
-        ctx.lineWidth = isE ? 18 : 1.8;
+        ctx.lineWidth = isE ? 22 : 2.2;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#0f172a';
-        ctx.fillStyle = '#0f172a';
+        ctx.strokeStyle = '#1a1a2e';
+        ctx.fillStyle = '#1a1a2e';
 
         if (pts.length === 1) {
             ctx.beginPath();
@@ -450,11 +449,11 @@ canvas.addEventListener('pointerdown', (e) => {
         lastDrawnY = e.offsetY;
 
         ctx.globalCompositeOperation = isFreeEraser ? 'destination-out' : 'source-over';
-        const penWidth = isFreeEraser ? 18 : ((e.pressure && e.pressure > 0) ? (1.2 + e.pressure * 1.4) : 1.8);
+        const penWidth = isFreeEraser ? 22 : ((e.pressure && e.pressure > 0 && e.pressure < 1) ? (1.8 + e.pressure * 1.6) : 2.2);
         ctx.lineWidth = penWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#0f172a';
+        ctx.strokeStyle = '#1a1a2e';
         ctx.fillStyle = '#0f172a';
 
         ctx.beginPath();
@@ -503,11 +502,11 @@ canvas.addEventListener('pointermove', (e) => {
     const isFreeEraser = (activeTool === 'free-eraser');
     if (e.pointerType === 'pen' || isFreeEraser) {
         ctx.globalCompositeOperation = isFreeEraser ? 'destination-out' : 'source-over';
-        const penWidth = isFreeEraser ? 18 : ((e.pressure && e.pressure > 0) ? (1.2 + e.pressure * 1.4) : 1.8);
+        const penWidth = isFreeEraser ? 22 : ((e.pressure && e.pressure > 0 && e.pressure < 1) ? (1.8 + e.pressure * 1.6) : 2.2);
         ctx.lineWidth = penWidth;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#0f172a';
+        ctx.strokeStyle = '#1a1a2e';
         
         if (currentStrokeObj) {
             currentStrokeObj.points.push({x: e.offsetX, y: e.offsetY, p: e.pressure || 0.5, t: Date.now()});
