@@ -118,39 +118,40 @@ body {
     transition: border-color 0.1s;
 }
 
-/* Portrait notebook ruled lines (Horizontal lines with classic red left margin) */
+/* Portrait notebook ruled lines (Horizontal lines spaced 1.5cm with red left margin) */
 .canvas-container.ruled-horizontal {
     background-color: #ffffff;
     background-image: 
         /* Left vertical red margin line of notebook paper */
         linear-gradient(90deg, transparent 55px, #f87171 55px, #f87171 57px, transparent 57px),
-        /* Horizontal ruled lines */
+        /* Horizontal ruled lines spaced 1.5cm */
         repeating-linear-gradient(
+            to bottom,
             transparent,
-            transparent 39px,
-            #cbd5e1 39px,
-            #cbd5e1 40px
+            transparent calc(1.5cm - 1px),
+            #cbd5e1 calc(1.5cm - 1px),
+            #cbd5e1 1.5cm
         );
     background-position: 0 0;
-    background-size: 100% 100%, 100% 40px;
+    background-size: 100% 100%, 100% 1.5cm;
 }
 
-/* Vertical ruled lines in portrait manner */
+/* Vertical ruled lines in portrait manner spaced 1.5cm */
 .canvas-container.ruled-vertical {
     background-color: #ffffff;
     background-image: 
         /* Top red margin line */
         linear-gradient(180deg, transparent 45px, #f87171 45px, #f87171 47px, transparent 47px),
-        /* Vertical ruled lines */
+        /* Vertical ruled lines spaced 1.5cm */
         repeating-linear-gradient(
-            90deg,
+            to right,
             transparent,
-            transparent 39px,
-            #cbd5e1 39px,
-            #cbd5e1 40px
+            transparent calc(1.5cm - 1px),
+            #cbd5e1 calc(1.5cm - 1px),
+            #cbd5e1 1.5cm
         );
     background-position: 0 0;
-    background-size: 100% 100%, 40px 100%;
+    background-size: 100% 100%, 1.5cm 100%;
 }
 
 .canvas-container.boundary-warning {
