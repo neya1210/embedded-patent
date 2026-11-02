@@ -168,12 +168,15 @@ canvas {
     position: absolute;
     bottom: 20px;
     right: 20px;
-    width: 70px;
-    height: 70px;
+    width: 65px;
+    height: 65px;
     border-radius: 50%;
     background-color: #9b59b6;
     color: white;
-    font-size: 30px;
+    font-size: 15px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
     border: none;
     box-shadow: 0 4px 10px rgba(0,0,0,0.4);
     z-index: 100;

@@ -1,11 +1,13 @@
 // =====================================================================
 //  SECURE STYLUS EXAM NOTEBOOK – CORE SCRIPT
 //  Features:
-//  - ✏️ Pen (smooth, pressure-sensitive realistic fountain pen lines)
-//  - 🧹 Eraser (WHOLE WORD ERASER: tap or drag over ANY word to erase it)
-//  - 👆 Read Word (reads ONLY the touched word, strictly isolated)
-//  - 🔊 Read Ans / Read Question (full speech synthesis)
-//  - 💬 Round FAB key (1 tap -> word, 2 taps -> line, long-press -> ans)
+//  - Stylus Pen (smooth, pressure-sensitive fountain pen lines)
+//  - Hand Touch Recognition (Strict palm rejection: hand never draws ink;
+//    hand tap reads words, or erases words in Eraser mode)
+//  - Whole Word Eraser (tap or drag over any word to erase the entire word)
+//  - Read Word (reads strictly isolated touched word, never whole page)
+//  - Read Ans / Read Question (full speech synthesis)
+//  - Round FAB key (1 tap -> word, 2 taps -> line, long-press -> ans)
 //  - High-precision Google Digital Ink Engine + Isolated Tesseract fallback
 //  - Encrypted offline exam storage (AES-256)
 // =====================================================================
@@ -53,16 +55,17 @@ let activeTool = 'pen'; // 'pen' | 'eraser' | 'read'
 let isDrawing = false;
 let isErasing = false;
 let isOCRBusy = false;
+let isHandTouch = false;
 let currentStrokeObj = null;
 let lastDrawX = 0, lastDrawY = 0;
 let lastKnownPoint = null;
 let isPortraitSheet = true;
 let lineOrientation = 'horizontal';
 
-// Pointer tracking for tap vs drag detection
-let pointerDownX = 0;
-let pointerDownY = 0;
-let pointerDownTime = 0;
+// Hand touch tracking for tap vs drag reading
+let touchStartX = 0;
+let touchStartY = 0;
+let touchStartTime = 0;
 
 // ---------- Web Audio API ----------
 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -96,7 +99,7 @@ function playTone(freq, vol, dur, type = 'sine') {
 }
 
 // ---------- Coordinate Helpers ----------
-// Always compute pixel-accurate coordinates relative to canvas regardless of scroll/borders
+// Pixel-accurate coordinates relative to canvas bounding box
 function getCanvasPoint(e) {
     const rect = canvas.getBoundingClientRect();
     return {
@@ -179,7 +182,6 @@ function loadExamData() {
 
 // ---------- Canvas Rendering ----------
 function redrawStrokes() {
-    const dpr = window.devicePixelRatio || 1;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -277,7 +279,6 @@ function getWordStrokesAt(touchX, touchY, maxTouchDist = 70) {
         }
     }
 
-    // Must be reasonably near the touch
     if (!closestStroke || closestDist > maxTouchDist) return null;
 
     const targetBounds = getStrokeBounds(closestStroke);
@@ -392,10 +393,10 @@ function setActiveTool(tool) {
 
     if (tool === 'eraser') {
         canvas.style.cursor = 'cell';
-        showStatus("🧹 Eraser active: Touch any word to erase it", 1200);
+        showStatus("Eraser active: Touch any word to erase it", 1200);
     } else if (tool === 'read') {
         canvas.style.cursor = 'help';
-        showStatus("👆 Read active: Touch any word to hear it", 1200);
+        showStatus("Read active: Touch any word to hear it", 1200);
     } else {
         canvas.style.cursor = 'crosshair';
     }
@@ -409,7 +410,7 @@ if (readWordBtn) readWordBtn.addEventListener('click', () => setActiveTool('read
 if (saveBtn) {
     saveBtn.addEventListener('click', () => {
         saveExamData();
-        showStatus("Saved securely ✓", 1200);
+        showStatus("Saved securely", 1200);
         playTone(520, 0.05, 0.08, 'sine');
     });
 }
@@ -469,11 +470,11 @@ if (orientationBtn) {
         if (isPortraitSheet) {
             appContainer.classList.add('portrait-sheet');
             appContainer.classList.remove('landscape-sheet');
-            orientationBtn.textContent = '📱 Portrait Sheet';
+            orientationBtn.textContent = 'Portrait Sheet';
         } else {
             appContainer.classList.remove('portrait-sheet');
             appContainer.classList.add('landscape-sheet');
-            orientationBtn.textContent = '🖥️ Landscape Sheet';
+            orientationBtn.textContent = 'Landscape Sheet';
         }
         setTimeout(resizeCanvas, 60);
     });
@@ -485,12 +486,12 @@ if (lineToggleBtn) {
             lineOrientation = 'vertical';
             canvasContainer.classList.remove('ruled-horizontal');
             canvasContainer.classList.add('ruled-vertical');
-            lineToggleBtn.textContent = '📏 Lines: Vert';
+            lineToggleBtn.textContent = 'Lines: Vert';
         } else {
             lineOrientation = 'horizontal';
             canvasContainer.classList.remove('ruled-vertical');
             canvasContainer.classList.add('ruled-horizontal');
-            lineToggleBtn.textContent = '📏 Lines: Horiz';
+            lineToggleBtn.textContent = 'Lines: Horiz';
         }
     });
 }
@@ -534,18 +535,17 @@ if (roundKey) {
 }
 
 // ---------------------------------------------------------------------
-//  POINTER EVENTS (Writing, Whole Word Erasing, Touch Reading)
+//  POINTER EVENTS (Stylus Inking, Palm Rejection, Hand Touch Reading)
 // ---------------------------------------------------------------------
 
 canvas.addEventListener('pointerdown', (e) => {
     const pt = getCanvasPoint(e);
-    pointerDownX = pt.x;
-    pointerDownY = pt.y;
-    pointerDownTime = Date.now();
-
-    // 1. ERASER MODE (or S Pen barrel eraser button pressed):
     const isStylusEraser = (e.pointerType === 'pen' && (e.buttons === 32 || e.button === 5));
-    if (activeTool === 'eraser' || isStylusEraser) {
+    const isEraserMode = (activeTool === 'eraser' || isStylusEraser);
+
+    // 1. ERASER MODE:
+    // Both hand touch and stylus erase the whole word
+    if (isEraserMode) {
         isErasing = true;
         try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
         eraseWordAt(pt.x, pt.y);
@@ -553,37 +553,52 @@ canvas.addEventListener('pointerdown', (e) => {
         return;
     }
 
-    // 2. READ TOOL: touch word to read immediately
+    // 2. HAND / FINGER TOUCH (pointerType === 'touch'):
+    // Strict Palm Rejection: Hand touch NEVER draws ink!
+    // Hand touch is recognized for reading words on tap or drag.
+    if (e.pointerType === 'touch') {
+        isHandTouch = true;
+        touchStartX = pt.x;
+        touchStartY = pt.y;
+        touchStartTime = Date.now();
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+        e.preventDefault();
+        return;
+    }
+
+    // 3. READ TOOL (Stylus or Mouse):
     if (activeTool === 'read') {
         readWordAt(pt.x, pt.y);
         e.preventDefault();
         return;
     }
 
-    // 3. PEN WRITING:
-    isDrawing = true;
-    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
-    currentStrokeObj = {
-        id: ++strokeIdCounter,
-        isEraser: false,
-        points: [{ x: pt.x, y: pt.y, p: e.pressure || 0.5, t: Date.now() }]
-    };
-    lastDrawX = pt.x;
-    lastDrawY = pt.y;
+    // 4. PEN INKING (Only Stylus 'pen' or Desktop 'mouse'):
+    if (activeTool === 'pen' && (e.pointerType === 'pen' || e.pointerType === 'mouse')) {
+        isDrawing = true;
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+        currentStrokeObj = {
+            id: ++strokeIdCounter,
+            isEraser: false,
+            points: [{ x: pt.x, y: pt.y, p: e.pressure || 0.5, t: Date.now() }]
+        };
+        lastDrawX = pt.x;
+        lastDrawY = pt.y;
 
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.lineWidth = 2.2;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = '#1a1a2e';
-    ctx.fillStyle = '#1a1a2e';
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.lineWidth = 2.2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#1a1a2e';
+        ctx.fillStyle = '#1a1a2e';
 
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 1.1, 0, Math.PI * 2);
-    ctx.fill();
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 1.1, 0, Math.PI * 2);
+        ctx.fill();
 
-    if (navigator.vibrate) navigator.vibrate(5);
-    e.preventDefault();
+        if (navigator.vibrate) navigator.vibrate(5);
+        e.preventDefault();
+    }
 });
 
 canvas.addEventListener('pointermove', (e) => {
@@ -607,7 +622,7 @@ canvas.addEventListener('pointermove', (e) => {
         }
     }
 
-    // ERASER SWIPE / DRAG: continuously erase any word crossed!
+    // ERASER SWIPE / DRAG:
     const isStylusEraser = (e.pointerType === 'pen' && (e.buttons === 32 || e.button === 5));
     if (isErasing || ((activeTool === 'eraser' || isStylusEraser) && (e.buttons >= 1 || e.pressure > 0))) {
         eraseWordAt(pt.x, pt.y);
@@ -615,7 +630,13 @@ canvas.addEventListener('pointermove', (e) => {
         return;
     }
 
-    // PEN DRAWING
+    // HAND TOUCH: Hand never draws ink. Ignore move (or palm resting)
+    if (e.pointerType === 'touch' || isHandTouch) {
+        e.preventDefault();
+        return;
+    }
+
+    // PEN INKING (Stylus / Mouse):
     if (!isDrawing || !currentStrokeObj) return;
 
     ctx.globalCompositeOperation = 'source-over';
@@ -669,24 +690,27 @@ canvas.addEventListener('pointerup', (e) => {
         return;
     }
 
-    // 2. PEN STROKE FINISH:
+    // 2. HAND TOUCH FINISH (Recognized for reading words):
+    if (e.pointerType === 'touch' || isHandTouch) {
+        isHandTouch = false;
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+
+        const moveDist = Math.hypot(pt.x - touchStartX, pt.y - touchStartY);
+        if (moveDist < 25) {
+            // Stationary hand tap -> read touched word!
+            readWordAt(touchStartX, touchStartY);
+        } else {
+            // Hand drag across area -> read selected area!
+            readSelectionStrokes(touchStartX, touchStartY, pt.x, pt.y);
+        }
+        e.preventDefault();
+        return;
+    }
+
+    // 3. PEN INKING FINISH:
     if (isDrawing && currentStrokeObj && currentStrokeObj.points.length > 0) {
         isDrawing = false;
         try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-
-        // If on touchscreen in Pen mode, user tapped without moving (< 12px, < 300ms):
-        // Treat as a read-tap on tablet!
-        const dragDist = Math.hypot(pt.x - pointerDownX, pt.y - pointerDownY);
-        const tapDur = Date.now() - pointerDownTime;
-
-        if (e.pointerType === 'touch' && dragDist < 12 && tapDur < 350) {
-            // Remove the tiny tap dot that was just drawn
-            currentStrokeObj = null;
-            redrawStrokes();
-            readWordAt(pt.x, pt.y);
-            return;
-        }
-
         currentStrokes.push(currentStrokeObj);
         lastKnownPoint = currentStrokeObj.points[currentStrokeObj.points.length - 1];
         saveExamData();
@@ -698,6 +722,7 @@ canvas.addEventListener('pointerup', (e) => {
 canvas.addEventListener('pointercancel', (e) => {
     isDrawing = false;
     isErasing = false;
+    isHandTouch = false;
     currentStrokeObj = null;
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
 });
@@ -872,7 +897,42 @@ async function readWordAt(touchX, touchY) {
     }
 }
 
-// 2. Read Last Written Word (FAB 1 Tap)
+// 2. Read Dragged Area Selection
+async function readSelectionStrokes(x1, y1, x2, y2) {
+    if (isOCRBusy) return;
+    const minX = Math.min(x1, x2) - 15;
+    const maxX = Math.max(x1, x2) + 15;
+    const minY = Math.min(y1, y2) - 20;
+    const maxY = Math.max(y1, y2) + 20;
+
+    const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
+    const selected = visible.filter(s => {
+        const b = getStrokeBounds(s);
+        return b && b.centerX >= minX && b.centerX <= maxX && b.centerY >= minY && b.centerY <= maxY;
+    });
+
+    if (selected.length === 0) {
+        showStatus("No text in selected area", 1200);
+        return;
+    }
+
+    isOCRBusy = true;
+    showStatus("Reading selection...", 0);
+
+    try {
+        const text = await recognizeStrokes(selected, null, false);
+        if (text && text.length > 0) {
+            showStatus(`"${text}"`, 0);
+            speak(text);
+        } else {
+            showStatus("Could not recognize text", 1400);
+        }
+    } finally {
+        isOCRBusy = false;
+    }
+}
+
+// 3. Read Last Written Word (FAB 1 Tap)
 async function readLastWord() {
     if (isOCRBusy) return;
     const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
@@ -888,7 +948,7 @@ async function readLastWord() {
     readWordAt(b.centerX, b.centerY);
 }
 
-// 3. Read Current Text Line (FAB 2 Taps)
+// 4. Read Current Text Line (FAB 2 Taps)
 async function readCurrentLine() {
     if (isOCRBusy) return;
     const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
@@ -926,7 +986,7 @@ async function readCurrentLine() {
     }
 }
 
-// 4. Read Entire Answer (FAB Long Press or "Read Ans" button)
+// 5. Read Entire Answer (FAB Long Press or "Read Ans" button)
 async function readAllStrokes() {
     if (isOCRBusy) return;
     const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
