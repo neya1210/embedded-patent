@@ -259,6 +259,10 @@ button {
     box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.35) !important;
 }
 
+.canvas-container.eraser-active canvas {
+    cursor: cell !important;
+}
+
 #read-word-btn.active-tool {
     background-color: #8b5cf6 !important;
     color: #ffffff !important;

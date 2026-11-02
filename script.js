@@ -1,11 +1,11 @@
 // =====================================================================
 //  SECURE STYLUS EXAM NOTEBOOK – CORE SCRIPT
 //  Features:
-//  - ✏️ Pen (pressure-sensitive fine line, smooth curves)
-//  - 🧹 Eraser (WHOLE WORD ERASER: erases entire word on touch/drag)
-//  - 👆 Read Word (reads ONLY the touched word, never the whole page)
-//  - 🔊 Read Ans / Read Question (full answer & question audio)
-//  - 💬 Round FAB key (1 tap -> last word, 2 taps -> line, long-press -> ans)
+//  - ✏️ Pen (smooth, pressure-sensitive realistic fountain pen lines)
+//  - 🧹 Eraser (WHOLE WORD ERASER: tap or drag over ANY word to erase it)
+//  - 👆 Read Word (reads ONLY the touched word, strictly isolated)
+//  - 🔊 Read Ans / Read Question (full speech synthesis)
+//  - 💬 Round FAB key (1 tap -> word, 2 taps -> line, long-press -> ans)
 //  - High-precision Google Digital Ink Engine + Isolated Tesseract fallback
 //  - Encrypted offline exam storage (AES-256)
 // =====================================================================
@@ -51,6 +51,7 @@ const appContainer    = document.querySelector('.app-container');
 // ---------- Application State ----------
 let activeTool = 'pen'; // 'pen' | 'eraser' | 'read'
 let isDrawing = false;
+let isErasing = false;
 let isOCRBusy = false;
 let currentStrokeObj = null;
 let lastDrawX = 0, lastDrawY = 0;
@@ -62,7 +63,6 @@ let lineOrientation = 'horizontal';
 let pointerDownX = 0;
 let pointerDownY = 0;
 let pointerDownTime = 0;
-let pointerMovedDist = 0;
 
 // ---------- Web Audio API ----------
 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -95,6 +95,16 @@ function playTone(freq, vol, dur, type = 'sine') {
     } catch (e) {}
 }
 
+// ---------- Coordinate Helpers ----------
+// Always compute pixel-accurate coordinates relative to canvas regardless of scroll/borders
+function getCanvasPoint(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+    };
+}
+
 // ---------- Canvas Resizing ----------
 function resizeCanvas() {
     const rect = canvasContainer.getBoundingClientRect();
@@ -103,7 +113,7 @@ function resizeCanvas() {
     canvas.height = Math.round(rect.height * dpr);
     canvas.style.width = rect.width + 'px';
     canvas.style.height = rect.height + 'px';
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     redrawStrokes();
 }
 window.addEventListener('resize', () => setTimeout(resizeCanvas, 60));
@@ -169,7 +179,11 @@ function loadExamData() {
 
 // ---------- Canvas Rendering ----------
 function redrawStrokes() {
+    const dpr = window.devicePixelRatio || 1;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
 
     for (const stroke of currentStrokes) {
         if (stroke.isEraser) continue;
@@ -229,35 +243,30 @@ function distToStroke(x, y, stroke) {
     const b = getStrokeBounds(stroke);
     if (!b) return Infinity;
 
-    // Fast bounding box rejection
-    if (x < b.minX - 35 || x > b.maxX + 35 || y < b.minY - 35 || y > b.maxY + 35) {
-        const dx = Math.max(b.minX - x, 0, x - b.maxX);
-        const dy = Math.max(b.minY - y, 0, y - b.maxY);
-        return Math.hypot(dx, dy);
+    // Fast bounding box proximity check (within 60px)
+    if (x >= b.minX - 60 && x <= b.maxX + 60 && y >= b.minY - 60 && y <= b.maxY + 60) {
+        let minDist = Infinity;
+        for (let i = 0; i < pts.length; i++) {
+            const d = Math.hypot(pts[i].x - x, pts[i].y - y);
+            if (d < minDist) minDist = d;
+        }
+        return minDist;
     }
 
-    let minDist = Infinity;
-    for (let i = 0; i < pts.length; i++) {
-        const d = Math.hypot(pts[i].x - x, pts[i].y - y);
-        if (d < minDist) minDist = d;
-    }
-    return minDist;
+    const dx = Math.max(b.minX - x, 0, x - b.maxX);
+    const dy = Math.max(b.minY - y, 0, y - b.maxY);
+    return Math.hypot(dx, dy);
 }
 
 // ---------------------------------------------------------------------
 //  PRECISION WORD ISOLATION
-//  Isolates ONLY the single word located at (touchX, touchY).
-//  Rules:
-//  1. Finds the closest written stroke to (touchX, touchY).
-//  2. Constrains candidate strokes to the SAME TEXT LINE (|centerY diff| <= 22px).
-//  3. Clusters consecutive strokes on that line with max horizontal gap <= 24px.
-//  This strictly guarantees that words are isolated and NEVER merges the whole page!
+//  Finds all strokes belonging to the word touched at (touchX, touchY).
 // ---------------------------------------------------------------------
-function getWordStrokesAt(touchX, touchY, maxTouchDist = 55) {
+function getWordStrokesAt(touchX, touchY, maxTouchDist = 70) {
     const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
     if (visible.length === 0) return null;
 
-    // 1. Find the stroke closest to touch
+    // 1. Find the stroke closest to touch point
     let closestStroke = null;
     let closestDist = Infinity;
     for (const s of visible) {
@@ -268,44 +277,43 @@ function getWordStrokesAt(touchX, touchY, maxTouchDist = 55) {
         }
     }
 
+    // Must be reasonably near the touch
     if (!closestStroke || closestDist > maxTouchDist) return null;
 
     const targetBounds = getStrokeBounds(closestStroke);
-    if (!targetBounds) return null;
-
-    // 2. Identify strokes on the same text line
-    const sameLineStrokes = visible.filter(s => {
-        const b = getStrokeBounds(s);
-        if (!b) return false;
-        const centerDiff = Math.abs(b.centerY - targetBounds.centerY);
-        const overlapY = Math.max(0, Math.min(b.maxY, targetBounds.maxY) - Math.max(b.minY, targetBounds.minY));
-        return centerDiff <= 22 || overlapY > 4;
-    });
-
-    // 3. Cluster all strokes belonging to this specific word
-    const WORD_HORIZONTAL_GAP = 24; // Maximum horizontal gap between strokes within a word
     const wordSet = new Set([closestStroke]);
-    let expanded = true;
 
-    while (expanded) {
-        expanded = false;
-        for (const candidate of sameLineStrokes) {
-            if (wordSet.has(candidate)) continue;
-            const candB = getStrokeBounds(candidate);
-            if (!candB) continue;
+    if (targetBounds) {
+        // 2. Identify candidate strokes on the same text line
+        const sameLineStrokes = visible.filter(s => {
+            const b = getStrokeBounds(s);
+            if (!b) return false;
+            const centerDiff = Math.abs(b.centerY - targetBounds.centerY);
+            const overlapY = Math.max(0, Math.min(b.maxY, targetBounds.maxY) - Math.max(b.minY, targetBounds.minY));
+            return centerDiff <= 35 || overlapY > 0;
+        });
 
-            for (const member of wordSet) {
-                const memB = getStrokeBounds(member);
-                if (!memB) continue;
+        // 3. Cluster strokes belonging to this specific word (horizontal gap <= 35px)
+        let expanded = true;
+        while (expanded) {
+            expanded = false;
+            for (const candidate of sameLineStrokes) {
+                if (wordSet.has(candidate)) continue;
+                const candB = getStrokeBounds(candidate);
+                if (!candB) continue;
 
-                // Horizontal gap between strokes
-                const horizGap = Math.max(0, Math.max(candB.minX - memB.maxX, memB.minX - candB.maxX));
-                const vertDiff = Math.abs(candB.centerY - memB.centerY);
+                for (const member of wordSet) {
+                    const memB = getStrokeBounds(member);
+                    if (!memB) continue;
 
-                if (horizGap <= WORD_HORIZONTAL_GAP && vertDiff <= 22) {
-                    wordSet.add(candidate);
-                    expanded = true;
-                    break;
+                    const horizGap = Math.max(0, Math.max(candB.minX - memB.maxX, memB.minX - candB.maxX));
+                    const vertDiff = Math.abs(candB.centerY - memB.centerY);
+
+                    if (horizGap <= 35 && vertDiff <= 35) {
+                        wordSet.add(candidate);
+                        expanded = true;
+                        break;
+                    }
                 }
             }
         }
@@ -333,10 +341,12 @@ function getWordStrokesAt(touchX, touchY, maxTouchDist = 55) {
 
 // ---------------------------------------------------------------------
 //  WHOLE WORD ERASER
-//  Touching or dragging over any part of a word deletes the ENTIRE word!
+//  Touching or dragging over ANY stroke of a word erases the ENTIRE word!
 // ---------------------------------------------------------------------
 function eraseWordAt(touchX, touchY) {
-    const wordInfo = getWordStrokesAt(touchX, touchY, 50);
+    if (!currentStrokes || currentStrokes.length === 0) return false;
+
+    const wordInfo = getWordStrokesAt(touchX, touchY, 70);
     if (!wordInfo || wordInfo.strokes.length === 0) return false;
 
     const toRemoveIds = new Set(wordInfo.strokes.map(s => s.id));
@@ -347,10 +357,10 @@ function eraseWordAt(touchX, touchY) {
         saveExamData();
         redrawStrokes();
 
-        if (navigator.vibrate) navigator.vibrate([20, 25]);
-        playTone(320, 0.08, 0.06, 'triangle');
+        if (navigator.vibrate) navigator.vibrate([20, 20]);
+        playTone(300, 0.08, 0.05, 'triangle');
 
-        showStatus("Word erased", 800);
+        showStatus("Word erased", 600);
         return true;
     }
     return false;
@@ -376,12 +386,16 @@ function setActiveTool(tool) {
     if (eraserBtn) eraserBtn.classList.toggle('active-tool', tool === 'eraser');
     if (readWordBtn) readWordBtn.classList.toggle('active-tool', tool === 'read');
 
+    if (canvasContainer) {
+        canvasContainer.classList.toggle('eraser-active', tool === 'eraser');
+    }
+
     if (tool === 'eraser') {
         canvas.style.cursor = 'cell';
-        showStatus("Eraser active: Touch any word to erase whole word", 1400);
+        showStatus("🧹 Eraser active: Touch any word to erase it", 1200);
     } else if (tool === 'read') {
         canvas.style.cursor = 'help';
-        showStatus("Read tool active: Touch any word to hear it", 1400);
+        showStatus("👆 Read active: Touch any word to hear it", 1200);
     } else {
         canvas.style.cursor = 'crosshair';
     }
@@ -524,86 +538,84 @@ if (roundKey) {
 // ---------------------------------------------------------------------
 
 canvas.addEventListener('pointerdown', (e) => {
-    pointerDownX = e.offsetX;
-    pointerDownY = e.offsetY;
+    const pt = getCanvasPoint(e);
+    pointerDownX = pt.x;
+    pointerDownY = pt.y;
     pointerDownTime = Date.now();
-    pointerMovedDist = 0;
 
-    // 1. Eraser Tool: erase the whole word at touch point immediately
+    // 1. ERASER MODE (or S Pen barrel eraser button pressed):
     const isStylusEraser = (e.pointerType === 'pen' && (e.buttons === 32 || e.button === 5));
     if (activeTool === 'eraser' || isStylusEraser) {
-        eraseWordAt(e.offsetX, e.offsetY);
+        isErasing = true;
+        try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+        eraseWordAt(pt.x, pt.y);
         e.preventDefault();
         return;
     }
 
-    // 2. Read Tool: touch word to read immediately
+    // 2. READ TOOL: touch word to read immediately
     if (activeTool === 'read') {
-        readWordAt(e.offsetX, e.offsetY);
+        readWordAt(pt.x, pt.y);
         e.preventDefault();
         return;
     }
 
-    // 3. Pen Tool:
-    // On tablet with stylus: Stylus always draws; Finger touch reads.
-    // On desktop/mouse: Mouse click-drag draws.
-    const isPenWriting = (e.pointerType === 'pen') || (e.pointerType === 'mouse');
+    // 3. PEN WRITING:
+    isDrawing = true;
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    currentStrokeObj = {
+        id: ++strokeIdCounter,
+        isEraser: false,
+        points: [{ x: pt.x, y: pt.y, p: e.pressure || 0.5, t: Date.now() }]
+    };
+    lastDrawX = pt.x;
+    lastDrawY = pt.y;
 
-    if (isPenWriting) {
-        isDrawing = true;
-        currentStrokeObj = {
-            id: ++strokeIdCounter,
-            isEraser: false,
-            points: [{ x: e.offsetX, y: e.offsetY, p: e.pressure || 0.5, t: Date.now() }]
-        };
-        lastDrawX = e.offsetX;
-        lastDrawY = e.offsetY;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.fillStyle = '#1a1a2e';
 
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.lineWidth = 2.2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#1a1a2e';
-        ctx.fillStyle = '#1a1a2e';
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 1.1, 0, Math.PI * 2);
+    ctx.fill();
 
-        ctx.beginPath();
-        ctx.arc(e.offsetX, e.offsetY, 1.1, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (navigator.vibrate) navigator.vibrate(5);
-        e.preventDefault();
-    }
+    if (navigator.vibrate) navigator.vibrate(5);
+    e.preventDefault();
 });
 
 canvas.addEventListener('pointermove', (e) => {
-    pointerMovedDist += Math.hypot(e.movementX || 0, e.movementY || 0);
+    const pt = getCanvasPoint(e);
 
     // Boundary Alert
     const margin = 28;
-    if (e.offsetX < margin || e.offsetX > canvas.offsetWidth - margin ||
-        e.offsetY < margin || e.offsetY > canvas.offsetHeight - margin) {
+    if (pt.x < margin || pt.x > canvas.offsetWidth - margin ||
+        pt.y < margin || pt.y > canvas.offsetHeight - margin) {
         canvasContainer.classList.add('boundary-warning');
-        if (isDrawing && navigator.vibrate) navigator.vibrate(40);
+        if ((isDrawing || isErasing) && navigator.vibrate) navigator.vibrate(40);
     } else {
         canvasContainer.classList.remove('boundary-warning');
     }
 
     // Hover guidance for resume point (Stylus)
-    if (!isDrawing && e.pointerType === 'pen' && lastKnownPoint) {
-        const dist = Math.hypot(e.offsetX - lastKnownPoint.x, e.offsetY - lastKnownPoint.y);
+    if (!isDrawing && !isErasing && e.pointerType === 'pen' && lastKnownPoint) {
+        const dist = Math.hypot(pt.x - lastKnownPoint.x, pt.y - lastKnownPoint.y);
         if (dist < 45) {
             playTone(450 + (45 - dist) * 8, 0.03, 0.02, 'sine');
         }
     }
 
-    // Eraser Tool Swipe: continuously erase any word crossed by eraser
+    // ERASER SWIPE / DRAG: continuously erase any word crossed!
     const isStylusEraser = (e.pointerType === 'pen' && (e.buttons === 32 || e.button === 5));
-    if ((activeTool === 'eraser' || isStylusEraser) && (e.buttons >= 1 || e.pressure > 0)) {
-        eraseWordAt(e.offsetX, e.offsetY);
+    if (isErasing || ((activeTool === 'eraser' || isStylusEraser) && (e.buttons >= 1 || e.pressure > 0))) {
+        eraseWordAt(pt.x, pt.y);
+        e.preventDefault();
         return;
     }
 
-    // Pen Drawing
+    // PEN DRAWING
     if (!isDrawing || !currentStrokeObj) return;
 
     ctx.globalCompositeOperation = 'source-over';
@@ -616,8 +628,8 @@ canvas.addEventListener('pointermove', (e) => {
     ctx.strokeStyle = '#1a1a2e';
 
     currentStrokeObj.points.push({
-        x: e.offsetX,
-        y: e.offsetY,
+        x: pt.x,
+        y: pt.y,
         p: e.pressure || 0.5,
         t: Date.now()
     });
@@ -637,45 +649,57 @@ canvas.addEventListener('pointermove', (e) => {
     } else {
         ctx.beginPath();
         ctx.moveTo(lastDrawX, lastDrawY);
-        ctx.lineTo(e.offsetX, e.offsetY);
+        ctx.lineTo(pt.x, pt.y);
         ctx.stroke();
-        lastDrawX = e.offsetX;
-        lastDrawY = e.offsetY;
+        lastDrawX = pt.x;
+        lastDrawY = pt.y;
     }
     e.preventDefault();
 });
 
 canvas.addEventListener('pointerup', (e) => {
-    // 1. If in eraser mode, nothing to commit as a stroke
-    if (activeTool === 'eraser') return;
+    const pt = getCanvasPoint(e);
 
-    // 2. Commit completed drawing stroke
+    // 1. ERASER FINISH:
+    if (isErasing || activeTool === 'eraser') {
+        eraseWordAt(pt.x, pt.y);
+        isErasing = false;
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        e.preventDefault();
+        return;
+    }
+
+    // 2. PEN STROKE FINISH:
     if (isDrawing && currentStrokeObj && currentStrokeObj.points.length > 0) {
         isDrawing = false;
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+
+        // If on touchscreen in Pen mode, user tapped without moving (< 12px, < 300ms):
+        // Treat as a read-tap on tablet!
+        const dragDist = Math.hypot(pt.x - pointerDownX, pt.y - pointerDownY);
+        const tapDur = Date.now() - pointerDownTime;
+
+        if (e.pointerType === 'touch' && dragDist < 12 && tapDur < 350) {
+            // Remove the tiny tap dot that was just drawn
+            currentStrokeObj = null;
+            redrawStrokes();
+            readWordAt(pt.x, pt.y);
+            return;
+        }
+
         currentStrokes.push(currentStrokeObj);
         lastKnownPoint = currentStrokeObj.points[currentStrokeObj.points.length - 1];
         saveExamData();
         currentStrokeObj = null;
         return;
     }
-
-    // 3. Touch Screen Reading (Finger Tap)
-    // When using Pen tool on tablet: tapping screen with finger reads touched word
-    if (e.pointerType === 'touch') {
-        const dragDist = Math.hypot(e.offsetX - pointerDownX, e.offsetY - pointerDownY);
-        if (dragDist < 20) {
-            // Stationary tap -> read touched word
-            readWordAt(pointerDownX, pointerDownY);
-        } else {
-            // Dragged selection -> read bounded area
-            readSelectionStrokes(pointerDownX, pointerDownY, e.offsetX, e.offsetY);
-        }
-    }
 });
 
-canvas.addEventListener('pointercancel', () => {
+canvas.addEventListener('pointercancel', (e) => {
     isDrawing = false;
+    isErasing = false;
     currentStrokeObj = null;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
 });
 
 // ---------------------------------------------------------------------
@@ -807,7 +831,7 @@ async function recognizeStrokes(strokes, bounds, isSingleWord = false) {
     if (!text) return "";
     text = text.trim();
     if (isSingleWord && text.length > 0) {
-        // Guarantee only the single touched word is returned
+        // Strictly return only the single touched word
         text = text.split(/\s+/)[0];
     }
     return text;
@@ -821,9 +845,9 @@ async function recognizeStrokes(strokes, bounds, isSingleWord = false) {
 async function readWordAt(touchX, touchY) {
     if (isOCRBusy) return;
 
-    const wordInfo = getWordStrokesAt(touchX, touchY, 55);
+    const wordInfo = getWordStrokesAt(touchX, touchY, 70);
     if (!wordInfo || wordInfo.strokes.length === 0) {
-        showStatus("No word found at touched area", 1200);
+        showStatus("No word found at touch point", 1200);
         return;
     }
 
@@ -831,7 +855,7 @@ async function readWordAt(touchX, touchY) {
     showStatus("Recognizing word...", 0);
 
     try {
-        // Send ONLY the strokes of this single word!
+        // Send ONLY the strokes of this single isolated word!
         const recognized = await recognizeStrokes(wordInfo.strokes, wordInfo.bounds, true);
 
         if (recognized && recognized.length > 0) {
@@ -848,43 +872,7 @@ async function readWordAt(touchX, touchY) {
     }
 }
 
-// 2. Read Drag-Selected Area
-async function readSelectionStrokes(x1, y1, x2, y2) {
-    if (isOCRBusy) return;
-
-    const minX = Math.min(x1, x2) - 15;
-    const maxX = Math.max(x1, x2) + 15;
-    const minY = Math.min(y1, y2) - 15;
-    const maxY = Math.max(y1, y2) + 15;
-
-    const selected = currentStrokes.filter(s => {
-        if (s.isEraser) return false;
-        const b = getStrokeBounds(s);
-        return b && b.centerX >= minX && b.centerX <= maxX && b.centerY >= minY && b.centerY <= maxY;
-    });
-
-    if (selected.length === 0) {
-        showStatus("No text in selected area", 1200);
-        return;
-    }
-
-    isOCRBusy = true;
-    showStatus("Reading selected text...", 0);
-
-    try {
-        const text = await recognizeStrokes(selected, null, false);
-        if (text && text.length > 0) {
-            showStatus(`"${text}"`, 0);
-            speak(text);
-        } else {
-            showStatus("Could not recognize text", 1400);
-        }
-    } finally {
-        isOCRBusy = false;
-    }
-}
-
-// 3. Read Last Written Word (FAB 1 Tap)
+// 2. Read Last Written Word (FAB 1 Tap)
 async function readLastWord() {
     if (isOCRBusy) return;
     const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
@@ -900,7 +888,7 @@ async function readLastWord() {
     readWordAt(b.centerX, b.centerY);
 }
 
-// 4. Read Current Text Line (FAB 2 Taps)
+// 3. Read Current Text Line (FAB 2 Taps)
 async function readCurrentLine() {
     if (isOCRBusy) return;
     const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
@@ -909,7 +897,6 @@ async function readCurrentLine() {
         return;
     }
 
-    // Find the bottom-most text line
     let maxCenterY = -Infinity;
     visible.forEach(s => {
         const b = getStrokeBounds(s);
@@ -918,7 +905,7 @@ async function readCurrentLine() {
 
     const lineStrokes = visible.filter(s => {
         const b = getStrokeBounds(s);
-        return b && Math.abs(b.centerY - maxCenterY) <= 24;
+        return b && Math.abs(b.centerY - maxCenterY) <= 30;
     });
 
     lineStrokes.sort((a, b) => getStrokeBounds(a).minX - getStrokeBounds(b).minX);
@@ -939,7 +926,7 @@ async function readCurrentLine() {
     }
 }
 
-// 5. Read Entire Answer (FAB Long Press or "Read Ans" button)
+// 4. Read Entire Answer (FAB Long Press or "Read Ans" button)
 async function readAllStrokes() {
     if (isOCRBusy) return;
     const visible = currentStrokes.filter(s => !s.isEraser && s.points && s.points.length > 0);
@@ -959,7 +946,7 @@ async function readAllStrokes() {
         const b = getStrokeBounds(stroke);
         let addedToLine = false;
         for (const line of lines) {
-            if (Math.abs(line.centerY - b.centerY) <= 22) {
+            if (Math.abs(line.centerY - b.centerY) <= 30) {
                 line.strokes.push(stroke);
                 addedToLine = true;
                 break;
@@ -970,7 +957,6 @@ async function readAllStrokes() {
         }
     }
 
-    // Sort strokes in each line from left to right
     const orderedStrokes = [];
     for (const line of lines) {
         line.strokes.sort((a, b) => getStrokeBounds(a).minX - getStrokeBounds(b).minX);
@@ -997,7 +983,7 @@ function speak(text) {
         return;
     }
 
-    window.speechSynthesis.cancel(); // Stop any pending speech
+    window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'en-US';
     utterance.rate = 0.95;
